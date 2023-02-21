@@ -1,5 +1,5 @@
 <p align="center">
-  <img src="res/logo-header.svg" alt="RustDesk - Dit fjernskrivebord"><br>
+  <img src="res/logo-header.svg" alt="RustDesk - Your remote desktop"><br>
   <a href="#free-public-servers">Servers</a> •
   <a href="#raw-steps-to-build">Build</a> •
   <a href="#how-to-build-with-docker">Docker</a> •
@@ -19,7 +19,7 @@ Yet another remote desktop software, written in Rust. Works out of the box, no c
 
 RustDesk welcomes contribution from everyone. See [`docs/CONTRIBUTING.md`](docs/CONTRIBUTING.md) for help getting started.
 
-[**How does RustDesk work?**](https://github.com/rustdesk/rustdesk/wiki/How-does-RustDesk-work%3F)
+[**FAQ**](https://github.com/rustdesk/rustdesk/wiki/FAQ)
 
 [**BINARY DOWNLOAD**](https://github.com/rustdesk/rustdesk/releases)
 
