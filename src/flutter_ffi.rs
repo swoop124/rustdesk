@@ -165,9 +165,15 @@ pub fn session_reconnect(id: String, force_relay: bool) {
 }
 
 pub fn session_toggle_option(id: String, value: String) {
+    let mut is_found = false;
     if let Some(session) = SESSIONS.write().unwrap().get_mut(&id) {
-        log::warn!("toggle option {}", value);
-        session.toggle_option(value);
+        is_found = true;
+        log::warn!("toggle option {}", &value);
+        session.toggle_option(value.clone());
+    }
+    #[cfg(not(any(target_os = "android", target_os = "ios")))]
+    if is_found && value == "disable-clipboard" {
+        crate::flutter::update_text_clipboard_required();
     }
 }
 
@@ -520,6 +526,13 @@ pub fn session_elevate_with_logon(id: String, username: String, password: String
 pub fn session_switch_sides(id: String) {
     if let Some(session) = SESSIONS.read().unwrap().get(&id) {
         session.switch_sides();
+    }
+}
+
+pub fn session_set_size(_id: String, _width: i32, _height: i32)  {
+    #[cfg(feature = "flutter_texture_render")]
+    if let Some(session) = SESSIONS.write().unwrap().get_mut(&_id) {
+        session.set_size(_width, _height);
     }
 }
 
@@ -1292,6 +1305,17 @@ pub fn main_hide_docker() -> SyncReturn<bool> {
     #[cfg(target_os = "macos")]
     crate::platform::macos::hide_dock();
     SyncReturn(true)
+}
+
+pub fn main_use_texture_render() -> SyncReturn<bool> {
+    #[cfg(not(feature = "flutter_texture_render"))]
+    {
+        SyncReturn(false)
+    }
+    #[cfg(feature = "flutter_texture_render")]
+    {
+        SyncReturn(true)
+    }
 }
 
 pub fn cm_start_listen_ipc_thread() {

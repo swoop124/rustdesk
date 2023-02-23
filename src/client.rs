@@ -45,6 +45,7 @@ use scrap::{
     codec::{Decoder, DecoderCfg},
     record::{Recorder, RecorderContext},
     VpxDecoderConfig, VpxVideoCodecId,
+    ImageFormat,
 };
 
 use crate::{
@@ -943,7 +944,12 @@ impl VideoHandler {
         }
         match &vf.union {
             Some(frame) => {
-                let res = self.decoder.handle_video_frame(frame, &mut self.rgb);
+                // windows && flutter_texture_render, fmt is ImageFormat::ABGR
+                #[cfg(all(target_os = "windows", feature = "flutter_texture_render"))]
+                let fmt = ImageFormat::ABGR;
+                #[cfg(not(all(target_os = "windows", feature = "flutter_texture_render")))]
+                let fmt = ImageFormat::ARGB;
+                let res = self.decoder.handle_video_frame(frame, fmt, &mut self.rgb);
                 if self.record {
                     self.recorder
                         .lock()
@@ -1240,11 +1246,6 @@ impl LoginConfigHandler {
         }
         if !name.contains("block-input") {
             self.save_config(config);
-        }
-        #[cfg(feature = "flutter")]
-        #[cfg(not(any(target_os = "android", target_os = "ios")))]
-        if name == "disable-clipboard" {
-            crate::flutter::update_text_clipboard_required();
         }
         let mut misc = Misc::new();
         misc.set_option(option);
