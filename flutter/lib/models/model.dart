@@ -731,8 +731,15 @@ class CanvasModel with ChangeNotifier {
     Size getSize() {
       final size = MediaQueryData.fromWindow(ui.window).size;
       // If minimized, w or h may be negative here.
-      double w = size.width - windowBorderWidth * 2;
-      double h = size.height - tabBarHeight - windowBorderWidth * 2;
+      double w = size.width -
+          windowBorderWidth * 2 -
+          kDragToResizeAreaPadding.left -
+          kDragToResizeAreaPadding.right;
+      double h = size.height -
+          tabBarHeight -
+          windowBorderWidth * 2 -
+          kDragToResizeAreaPadding.top -
+          kDragToResizeAreaPadding.bottom;
       return Size(w < 0 ? 0 : w, h < 0 ? 0 : h);
     }
 
@@ -810,6 +817,10 @@ class CanvasModel with ChangeNotifier {
   double get tabBarHeight => stateGlobal.tabBarHeight;
 
   moveDesktopMouse(double x, double y) {
+    if (size.width == 0 || size.height == 0) {
+      return;
+    }
+
     // On mobile platforms, move the canvas with the cursor.
     final dw = getDisplayWidth() * _scale;
     final dh = getDisplayHeight() * _scale;
