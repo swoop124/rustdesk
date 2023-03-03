@@ -153,8 +153,14 @@ pub struct FlutterHandler {
 }
 
 #[cfg(feature = "flutter_texture_render")]
-pub type FlutterRgbaRendererPluginOnRgba =
-    unsafe extern "C" fn(texture_rgba: *mut c_void, buffer: *const u8, width: c_int, height: c_int);
+pub type FlutterRgbaRendererPluginOnRgba = unsafe extern "C" fn(
+    texture_rgba: *mut c_void,
+    buffer: *const u8,
+    len: c_int,
+    width: c_int,
+    height: c_int,
+    dst_rgba_stride: c_int,
+);
 
 // Video Texture Renderer in Flutter
 #[cfg(feature = "flutter_texture_render")]
@@ -164,7 +170,6 @@ struct VideoRenderer {
     ptr: usize,
     width: i32,
     height: i32,
-    data_len: usize,
     on_rgba_func: Option<Symbol<'static, FlutterRgbaRendererPluginOnRgba>>,
 }
 
@@ -193,7 +198,6 @@ impl Default for VideoRenderer {
             ptr: 0,
             width: 0,
             height: 0,
-            data_len: 0,
             on_rgba_func,
         }
     }
@@ -205,15 +209,10 @@ impl VideoRenderer {
     pub fn set_size(&mut self, width: i32, height: i32) {
         self.width = width;
         self.height = height;
-        self.data_len = if width > 0 && height > 0 {
-            (width * height * 4) as usize
-        } else {
-            0
-        };
     }
 
     pub fn on_rgba(&self, rgba: &Vec<u8>) {
-        if self.ptr == usize::default() || rgba.len() != self.data_len {
+        if self.ptr == usize::default() {
             return;
         }
         if let Some(func) = &self.on_rgba_func {
@@ -221,8 +220,10 @@ impl VideoRenderer {
                 func(
                     self.ptr as _,
                     rgba.as_ptr() as _,
+                    rgba.len() as _,
                     self.width as _,
                     self.height as _,
+                    crate::DST_STRIDE_RGBA as _,
                 )
             };
         }

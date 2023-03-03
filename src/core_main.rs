@@ -129,7 +129,7 @@ pub fn core_main() -> Option<Vec<String>> {
         {
             use crate::platform;
             if args[0] == "--uninstall" {
-                if let Err(err) = platform::uninstall_me() {
+                if let Err(err) = platform::uninstall_me(true) {
                     log::error!("Failed to uninstall: {}", err);
                 }
                 return None;
@@ -147,7 +147,7 @@ pub fn core_main() -> Option<Vec<String>> {
                 hbb_common::allow_err!(platform::update_me());
                 return None;
             } else if args[0] == "--reinstall" {
-                hbb_common::allow_err!(platform::uninstall_me());
+                hbb_common::allow_err!(platform::uninstall_me(false));
                 hbb_common::allow_err!(platform::install_me(
                     "desktopicon startmenu",
                     "".to_owned(),
@@ -225,6 +225,13 @@ pub fn core_main() -> Option<Vec<String>> {
                 } else {
                     println!("Administrative privileges required!");
                 }
+            }
+            return None;
+        } else if args[0] == "--get-id" {
+            if crate::platform::is_root() {
+                println!("{}", crate::ipc::get_id());
+            } else {
+                println!("Permission denied!");
             }
             return None;
         } else if args[0] == "--check-hwcodec-config" {
