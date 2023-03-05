@@ -430,6 +430,7 @@ class _FileManagerPageState extends State<FileManagerPage>
                                           message: lastModifiedStr,
                                           child: Text(
                                             lastModifiedStr,
+                                            overflow: TextOverflow.ellipsis,
                                             style: TextStyle(
                                               fontSize: 12,
                                               color: MyTheme.darkGray,
@@ -644,7 +645,7 @@ class _FileManagerPageState extends State<FileManagerPage>
                                             Duration(milliseconds: 500),
                                         message: item.jobName,
                                         child: Text(
-                                          item.jobName,
+                                          item.fileName,
                                           maxLines: 1,
                                           overflow: TextOverflow.ellipsis,
                                         ).paddingSymmetric(vertical: 10),
