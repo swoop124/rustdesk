@@ -608,7 +608,7 @@ class WindowActionPanelState extends State<WindowActionPanel>
                   offstage: !widget.showMaximize || Platform.isMacOS,
                   child: Obx(() => ActionIcon(
                         message:
-                            widget.isMaximized.value ? "Restore" : "Maximize",
+                            widget.isMaximized.value ? 'Restore' : 'Maximize',
                         icon: widget.isMaximized.value
                             ? IconFont.restore
                             : IconFont.max,

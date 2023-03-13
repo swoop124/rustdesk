@@ -128,10 +128,13 @@ class ServerModel with ChangeNotifier {
         _connectStatus = status;
         notifyListeners();
       }
-      final res = await bind.cmCheckClientsLength(length: _clients.length);
-      if (res != null) {
-        debugPrint("clients not match!");
-        updateClientState(res);
+
+      if (desktopType == DesktopType.cm) {
+        final res = await bind.cmCheckClientsLength(length: _clients.length);
+        if (res != null) {
+          debugPrint("clients not match!");
+          updateClientState(res);
+        }
       }
 
       updatePasswordModel();
@@ -231,6 +234,9 @@ class ServerModel with ChangeNotifier {
   }
 
   toggleAudio() async {
+    if (clients.isNotEmpty) {
+      await showClientsMayNotBeChangedAlert(parent.target);
+    }
     if (!_audioOk && !await AndroidPermissionManager.check(kRecordAudio)) {
       final res = await AndroidPermissionManager.request(kRecordAudio);
       if (!res) {
@@ -245,6 +251,9 @@ class ServerModel with ChangeNotifier {
   }
 
   toggleFile() async {
+    if (clients.isNotEmpty) {
+      await showClientsMayNotBeChangedAlert(parent.target);
+    }
     if (!_fileOk &&
         !await AndroidPermissionManager.check(kManageExternalStorage)) {
       final res =
@@ -260,7 +269,10 @@ class ServerModel with ChangeNotifier {
     notifyListeners();
   }
 
-  toggleInput() {
+  toggleInput() async {
+    if (clients.isNotEmpty) {
+      await showClientsMayNotBeChangedAlert(parent.target);
+    }
     if (_inputOk) {
       parent.target?.invokeMethod("stop_input");
       bind.mainSetOption(key: "enable-keyboard", value: 'N');
@@ -289,7 +301,7 @@ class ServerModel with ChangeNotifier {
           content: Text(translate("android_stop_service_tip")),
           actions: [
             TextButton(onPressed: close, child: Text(translate("Cancel"))),
-            ElevatedButton(onPressed: submit, child: Text(translate("OK"))),
+            TextButton(onPressed: submit, child: Text(translate("OK"))),
           ],
           onSubmit: submit,
           onCancel: close,
@@ -708,6 +720,25 @@ showInputWarnAlert(FFI ffi) {
         dialogButton("Open System Setting", onPressed: submit),
       ],
       onSubmit: submit,
+      onCancel: close,
+    );
+  });
+}
+
+Future<void> showClientsMayNotBeChangedAlert(FFI? ffi) async {
+  await ffi?.dialogManager.show((setState, close) {
+    return CustomAlertDialog(
+      title: Text(translate("Permissions")),
+      content: Column(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          Text(translate("android_permission_may_not_change_tip")),
+        ],
+      ),
+      actions: [
+        dialogButton("OK", onPressed: close),
+      ],
+      onSubmit: close,
       onCancel: close,
     );
   });

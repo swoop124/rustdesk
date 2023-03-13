@@ -111,32 +111,39 @@ class ColorThemeExtension extends ThemeExtension<ColorThemeExtension> {
     required this.border,
     required this.border2,
     required this.highlight,
+    required this.drag_indicator,
   });
 
   final Color? border;
   final Color? border2;
   final Color? highlight;
+  final Color? drag_indicator;
 
-  static const light = ColorThemeExtension(
+  static final light = ColorThemeExtension(
     border: Color(0xFFCCCCCC),
     border2: Color(0xFFBBBBBB),
     highlight: Color(0xFFE5E5E5),
+    drag_indicator: Colors.grey[800],
   );
 
-  static const dark = ColorThemeExtension(
+  static final dark = ColorThemeExtension(
     border: Color(0xFF555555),
     border2: Color(0xFFE5E5E5),
     highlight: Color(0xFF3F3F3F),
+    drag_indicator: Colors.grey,
   );
 
   @override
   ThemeExtension<ColorThemeExtension> copyWith(
-      {Color? border, Color? border2, Color? highlight}) {
+      {Color? border,
+      Color? border2,
+      Color? highlight,
+      Color? drag_indicator}) {
     return ColorThemeExtension(
-      border: border ?? this.border,
-      border2: border2 ?? this.border2,
-      highlight: highlight ?? this.highlight,
-    );
+        border: border ?? this.border,
+        border2: border2 ?? this.border2,
+        highlight: highlight ?? this.highlight,
+        drag_indicator: drag_indicator ?? this.drag_indicator);
   }
 
   @override
@@ -149,6 +156,7 @@ class ColorThemeExtension extends ThemeExtension<ColorThemeExtension> {
       border: Color.lerp(border, other.border, t),
       border2: Color.lerp(border2, other.border2, t),
       highlight: Color.lerp(highlight, other.highlight, t),
+      drag_indicator: Color.lerp(drag_indicator, other.drag_indicator, t),
     );
   }
 }
@@ -252,7 +260,11 @@ class MyTheme {
         ),
       ),
     ),
-    colorScheme: ColorScheme.light(primary: Colors.blue, background: grayBg),
+    menuBarTheme: MenuBarThemeData(
+        style:
+            MenuStyle(backgroundColor: MaterialStatePropertyAll(Colors.white))),
+    colorScheme: ColorScheme.light(
+        primary: Colors.blue, secondary: accent, background: grayBg),
   ).copyWith(
     extensions: <ThemeExtension<dynamic>>[
       ColorThemeExtension.light,
@@ -317,6 +329,7 @@ class MyTheme {
     elevatedButtonTheme: ElevatedButtonThemeData(
       style: ElevatedButton.styleFrom(
         backgroundColor: MyTheme.accent,
+        foregroundColor: Colors.white,
         disabledForegroundColor: Colors.white70,
         disabledBackgroundColor: Colors.white10,
         shape: RoundedRectangleBorder(
@@ -336,7 +349,6 @@ class MyTheme {
       ),
     ),
     checkboxTheme: const CheckboxThemeData(
-      checkColor: MaterialStatePropertyAll(dark),
       splashRadius: 0,
       shape: RoundedRectangleBorder(
         borderRadius: BorderRadius.all(
@@ -351,8 +363,12 @@ class MyTheme {
         ),
       ),
     ),
+    menuBarTheme: MenuBarThemeData(
+        style: MenuStyle(
+            backgroundColor: MaterialStatePropertyAll(Color(0xFF121212)))),
     colorScheme: ColorScheme.dark(
       primary: Colors.blue,
+      secondary: accent,
       background: Color(0xFF24252B),
     ),
   ).copyWith(
@@ -430,7 +446,7 @@ final ButtonStyle flatButtonStyle = TextButton.styleFrom(
 );
 
 List<Locale> supportedLocales = const [
-  // specify CN/TW to fix CJK issue in flutter
+  Locale('en', 'US'),
   Locale('zh', 'CN'),
   Locale('zh', 'TW'),
   Locale('zh', 'SG'),
@@ -452,7 +468,7 @@ List<Locale> supportedLocales = const [
   Locale('vi'),
   Locale('pl'),
   Locale('kz'),
-  Locale('en', 'US'),
+  Locale('es'),
 ];
 
 String formatDurationToTime(Duration duration) {

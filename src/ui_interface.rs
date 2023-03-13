@@ -605,7 +605,7 @@ pub fn remove_discovered(id: String) {
 
 #[inline]
 pub fn get_uuid() -> String {
-    base64::encode(hbb_common::get_uuid())
+    crate::encode64(hbb_common::get_uuid())
 }
 
 #[cfg(any(target_os = "android", target_os = "ios", feature = "flutter"))]
@@ -648,20 +648,50 @@ pub fn get_langs() -> String {
 #[inline]
 pub fn default_video_save_directory() -> String {
     let appname = crate::get_app_name();
+    // ui process can show it correctly Once vidoe process created it.
+    let try_create = |path: &std::path::Path| {
+        if !path.exists() {
+            std::fs::create_dir_all(path).ok();
+        }
+        if path.exists() {
+            path.to_string_lossy().to_string()
+        } else {
+            "".to_string()
+        }
+    };
 
     #[cfg(any(target_os = "android", target_os = "ios"))]
     if let Ok(home) = config::APP_HOME_DIR.read() {
         let mut path = home.to_owned();
         path.push_str("/RustDesk/ScreenRecord");
-        return path;
+        let dir = try_create(&std::path::Path::new(&path));
+        if !dir.is_empty() {
+            return dir;
+        }
     }
 
     if let Some(user) = directories_next::UserDirs::new() {
         if let Some(video_dir) = user.video_dir() {
-            return video_dir.join(appname).to_string_lossy().to_string();
+            let dir = try_create(&video_dir.join(&appname));
+            if !dir.is_empty() {
+                return dir;
+            }
+            if video_dir.exists() {
+                return video_dir.to_string_lossy().to_string();
+            }
+        }
+        if let Some(desktop_dir) = user.desktop_dir() {
+            if desktop_dir.exists() {
+                return desktop_dir.to_string_lossy().to_string();
+            }
+        }
+        let home = user.home_dir();
+        if home.exists() {
+            return home.to_string_lossy().to_string();
         }
     }
 
+    // same order as above
     #[cfg(not(any(target_os = "android", target_os = "ios")))]
     if let Some(home) = crate::platform::get_active_user_home() {
         let name = if cfg!(target_os = "macos") {
@@ -669,12 +699,31 @@ pub fn default_video_save_directory() -> String {
         } else {
             "Videos"
         };
-        return home.join(name).join(appname).to_string_lossy().to_string();
+        let video_dir = home.join(name);
+        let dir = try_create(&video_dir.join(&appname));
+        if !dir.is_empty() {
+            return dir;
+        }
+        if video_dir.exists() {
+            return video_dir.to_string_lossy().to_string();
+        }
+        let desktop_dir = home.join("Desktop");
+        if desktop_dir.exists() {
+            return desktop_dir.to_string_lossy().to_string();
+        }
+        if home.exists() {
+            return home.to_string_lossy().to_string();
+        }
     }
 
     if let Ok(exe) = std::env::current_exe() {
-        if let Some(dir) = exe.parent() {
-            return dir.join("videos").to_string_lossy().to_string();
+        if let Some(parent) = exe.parent() {
+            let dir = try_create(&parent.join("videos"));
+            if !dir.is_empty() {
+                return dir;
+            }
+            // basically exist
+            return parent.to_string_lossy().to_string();
         }
     }
     "".to_owned()
@@ -876,7 +925,7 @@ pub async fn change_id_shared(id: String, old_id: String) -> &'static str {
     #[cfg(not(any(target_os = "android", target_os = "ios")))]
     let uuid = machine_uid::get().unwrap_or("".to_owned());
     #[cfg(any(target_os = "android", target_os = "ios"))]
-    let uuid = base64::encode(hbb_common::get_uuid());
+    let uuid = crate::encode64(hbb_common::get_uuid());
 
     if uuid.is_empty() {
         log::error!("Failed to change id, uuid is_empty");
