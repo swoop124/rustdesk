@@ -14,6 +14,7 @@ import 'package:wakelock/wakelock.dart';
 
 import '../../common.dart';
 import '../../common/widgets/overlay.dart';
+import '../../common/widgets/dialog.dart';
 import '../../common/widgets/remote_input.dart';
 import '../../models/input_model.dart';
 import '../../models/model.dart';
@@ -695,10 +696,8 @@ class _RemotePageState extends State<RemotePage> {
   //     return CustomAlertDialog(
   //         title: Text(translate('Physical Keyboard Input Mode')),
   //         content: Column(mainAxisSize: MainAxisSize.min, children: [
-  //           getRadio('Legacy mode', 'legacy', current, setMode,
-  //               contentPadding: EdgeInsets.zero),
-  //           getRadio('Map mode', 'map', current, setMode,
-  //               contentPadding: EdgeInsets.zero),
+  //           getRadio('Legacy mode', 'legacy', current, setMode),
+  //           getRadio('Map mode', 'map', current, setMode),
   //         ]));
   //   }, clickMaskDismiss: true);
   // }
@@ -1059,7 +1058,7 @@ void showOptions(
     final toggles = [
       getToggle(id, setState, 'show-quality-monitor', 'Show quality monitor'),
     ];
-    if (!gFFI.canvasModel.cursorEmbedded) {
+    if (!gFFI.canvasModel.cursorEmbedded && !pi.is_wayland) {
       toggles.insert(0,
           getToggle(id, setState, 'show-remote-cursor', 'Show remote cursor'));
     }
@@ -1068,7 +1067,6 @@ void showOptions(
       content: Column(
           mainAxisSize: MainAxisSize.min,
           children: displays + radios + toggles + more),
-      contentPadding: 0,
     );
   }, clickMaskDismiss: true, backDismiss: true);
 }

@@ -19,6 +19,8 @@ import '../../common/widgets/peer_tab_page.dart';
 import '../../models/platform_model.dart';
 import '../widgets/button.dart';
 
+import 'package:flutter_hbb/common/widgets/dialog.dart';
+
 /// Connection page for connecting to a remote peer.
 class ConnectionPage extends StatefulWidget {
   const ConnectionPage({Key? key}) : super(key: key);
@@ -193,7 +195,7 @@ class _ConnectionPageState extends State<ConnectionPage>
                       style: const TextStyle(
                         fontFamily: 'WorkSans',
                         fontSize: 22,
-                        height: 1.25,
+                        height: 1.4,
                       ),
                       maxLines: 1,
                       cursorColor:
@@ -204,22 +206,8 @@ class _ConnectionPageState extends State<ConnectionPage>
                           hintText: _idInputFocused.value
                               ? null
                               : translate('Enter Remote ID'),
-                          border: OutlineInputBorder(
-                              borderRadius: BorderRadius.zero,
-                              borderSide: BorderSide(
-                                  color: MyTheme.color(context).border!)),
-                          enabledBorder: OutlineInputBorder(
-                              borderRadius: BorderRadius.zero,
-                              borderSide: BorderSide(
-                                  color: MyTheme.color(context).border!)),
-                          focusedBorder: const OutlineInputBorder(
-                            borderRadius: BorderRadius.zero,
-                            borderSide:
-                                BorderSide(color: MyTheme.button, width: 3),
-                          ),
-                          isDense: true,
                           contentPadding: const EdgeInsets.symmetric(
-                              horizontal: 10, vertical: 12)),
+                              horizontal: 15, vertical: 13)),
                       controller: _idController,
                       inputFormatters: [IDTextInputFormatter()],
                       onSubmitted: (s) {

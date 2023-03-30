@@ -112,18 +112,21 @@ class ColorThemeExtension extends ThemeExtension<ColorThemeExtension> {
     required this.border2,
     required this.highlight,
     required this.drag_indicator,
+    required this.shadow,
   });
 
   final Color? border;
   final Color? border2;
   final Color? highlight;
   final Color? drag_indicator;
+  final Color? shadow;
 
   static final light = ColorThemeExtension(
     border: Color(0xFFCCCCCC),
     border2: Color(0xFFBBBBBB),
     highlight: Color(0xFFE5E5E5),
     drag_indicator: Colors.grey[800],
+    shadow: Colors.black,
   );
 
   static final dark = ColorThemeExtension(
@@ -131,19 +134,24 @@ class ColorThemeExtension extends ThemeExtension<ColorThemeExtension> {
     border2: Color(0xFFE5E5E5),
     highlight: Color(0xFF3F3F3F),
     drag_indicator: Colors.grey,
+    shadow: Colors.grey,
   );
 
   @override
-  ThemeExtension<ColorThemeExtension> copyWith(
-      {Color? border,
-      Color? border2,
-      Color? highlight,
-      Color? drag_indicator}) {
+  ThemeExtension<ColorThemeExtension> copyWith({
+    Color? border,
+    Color? border2,
+    Color? highlight,
+    Color? drag_indicator,
+    Color? shadow,
+  }) {
     return ColorThemeExtension(
-        border: border ?? this.border,
-        border2: border2 ?? this.border2,
-        highlight: highlight ?? this.highlight,
-        drag_indicator: drag_indicator ?? this.drag_indicator);
+      border: border ?? this.border,
+      border2: border2 ?? this.border2,
+      highlight: highlight ?? this.highlight,
+      drag_indicator: drag_indicator ?? this.drag_indicator,
+      shadow: shadow ?? this.shadow,
+    );
   }
 
   @override
@@ -157,6 +165,7 @@ class ColorThemeExtension extends ThemeExtension<ColorThemeExtension> {
       border2: Color.lerp(border2, other.border2, t),
       highlight: Color.lerp(highlight, other.highlight, t),
       drag_indicator: Color.lerp(drag_indicator, other.drag_indicator, t),
+      shadow: Color.lerp(shadow, other.shadow, t),
     );
   }
 }
@@ -177,6 +186,71 @@ class MyTheme {
   static const Color button = Color(0xFF2C8CFF);
   static const Color hoverBorder = Color(0xFF999999);
 
+  // ListTile
+  static const ListTileThemeData listTileTheme = ListTileThemeData(
+    shape: RoundedRectangleBorder(
+      borderRadius: BorderRadius.all(
+        Radius.circular(5),
+      ),
+    ),
+  );
+
+  // Checkbox
+  static const CheckboxThemeData checkboxTheme = CheckboxThemeData(
+    splashRadius: 0,
+    shape: RoundedRectangleBorder(
+      borderRadius: BorderRadius.all(
+        Radius.circular(5),
+      ),
+    ),
+  );
+
+  // TextButton
+  // Value is used to calculate "dialog.actionsPadding"
+  static const double mobileTextButtonPaddingLR = 20;
+
+  // TextButton on mobile needs a fixed padding, otherwise small buttons
+  // like "OK" has a larger left/right padding.
+  static TextButtonThemeData mobileTextButtonTheme = TextButtonThemeData(
+    style: TextButton.styleFrom(
+      padding: EdgeInsets.symmetric(horizontal: mobileTextButtonPaddingLR),
+      shape: RoundedRectangleBorder(
+        borderRadius: BorderRadius.circular(8.0),
+      ),
+    ),
+  );
+
+  // Dialogs
+  static const double dialogPadding = 24;
+
+  // padding bottom depends on content (some dialogs has no content)
+  static EdgeInsets dialogTitlePadding({bool content = true}) {
+    final double p = dialogPadding;
+
+    return EdgeInsets.fromLTRB(p, p, p, content ? 0 : p);
+  }
+
+  // padding bottom depends on actions (mobile has dialogs without actions)
+  static EdgeInsets dialogContentPadding({bool actions = true}) {
+    final double p = dialogPadding;
+
+    return isDesktop
+        ? EdgeInsets.fromLTRB(p, p, p, actions ? (p - 4) : p)
+        : EdgeInsets.fromLTRB(p, p, p, actions ? (p / 2) : p);
+  }
+
+  static EdgeInsets dialogActionsPadding() {
+    final double p = dialogPadding;
+
+    return isDesktop
+        ? EdgeInsets.fromLTRB(p, 0, p, (p - 4))
+        : EdgeInsets.fromLTRB(p, 0, (p - mobileTextButtonPaddingLR), (p / 2));
+  }
+
+  static EdgeInsets dialogButtonPadding = isDesktop
+      ? EdgeInsets.only(left: dialogPadding)
+      : EdgeInsets.only(left: dialogPadding / 3);
+
   static ThemeData lightTheme = ThemeData(
     brightness: Brightness.light,
     hoverColor: Color.fromARGB(255, 224, 224, 224),
@@ -192,16 +266,16 @@ class MyTheme {
         ),
       ),
     ),
-    inputDecorationTheme: InputDecorationTheme(
-      fillColor: grayBg,
-      filled: true,
-      isDense: true,
-      contentPadding: EdgeInsets.all(15),
-      border: UnderlineInputBorder(
-        borderRadius: BorderRadius.circular(18),
-        borderSide: BorderSide.none,
-      ),
-    ),
+    inputDecorationTheme: isDesktop
+        ? InputDecorationTheme(
+            fillColor: grayBg,
+            filled: true,
+            isDense: true,
+            border: OutlineInputBorder(
+              borderRadius: BorderRadius.circular(8),
+            ),
+          )
+        : null,
     textTheme: const TextTheme(
         titleLarge: TextStyle(fontSize: 19, color: Colors.black87),
         titleSmall: TextStyle(fontSize: 14, color: Colors.black87),
@@ -227,7 +301,7 @@ class MyTheme {
               ),
             ),
           )
-        : null,
+        : mobileTextButtonTheme,
     elevatedButtonTheme: ElevatedButtonThemeData(
       style: ElevatedButton.styleFrom(
         backgroundColor: MyTheme.accent,
@@ -245,21 +319,8 @@ class MyTheme {
         ),
       ),
     ),
-    checkboxTheme: const CheckboxThemeData(
-      splashRadius: 0,
-      shape: RoundedRectangleBorder(
-        borderRadius: BorderRadius.all(
-          Radius.circular(5),
-        ),
-      ),
-    ),
-    listTileTheme: ListTileThemeData(
-      shape: RoundedRectangleBorder(
-        borderRadius: BorderRadius.all(
-          Radius.circular(5),
-        ),
-      ),
-    ),
+    checkboxTheme: checkboxTheme,
+    listTileTheme: listTileTheme,
     menuBarTheme: MenuBarThemeData(
         style:
             MenuStyle(backgroundColor: MaterialStatePropertyAll(Colors.white))),
@@ -286,16 +347,16 @@ class MyTheme {
         ),
       ),
     ),
-    inputDecorationTheme: InputDecorationTheme(
-      fillColor: Color(0xFF24252B),
-      filled: true,
-      isDense: true,
-      contentPadding: EdgeInsets.all(15),
-      border: UnderlineInputBorder(
-        borderRadius: BorderRadius.circular(18),
-        borderSide: BorderSide.none,
-      ),
-    ),
+    inputDecorationTheme: isDesktop
+        ? InputDecorationTheme(
+            fillColor: Color(0xFF24252B),
+            filled: true,
+            isDense: true,
+            border: OutlineInputBorder(
+              borderRadius: BorderRadius.circular(8),
+            ),
+          )
+        : null,
     textTheme: const TextTheme(
         titleLarge: TextStyle(fontSize: 19),
         titleSmall: TextStyle(fontSize: 14),
@@ -325,7 +386,7 @@ class MyTheme {
               ),
             ),
           )
-        : null,
+        : mobileTextButtonTheme,
     elevatedButtonTheme: ElevatedButtonThemeData(
       style: ElevatedButton.styleFrom(
         backgroundColor: MyTheme.accent,
@@ -348,21 +409,8 @@ class MyTheme {
         ),
       ),
     ),
-    checkboxTheme: const CheckboxThemeData(
-      splashRadius: 0,
-      shape: RoundedRectangleBorder(
-        borderRadius: BorderRadius.all(
-          Radius.circular(5),
-        ),
-      ),
-    ),
-    listTileTheme: ListTileThemeData(
-      shape: RoundedRectangleBorder(
-        borderRadius: BorderRadius.all(
-          Radius.circular(5),
-        ),
-      ),
-    ),
+    checkboxTheme: checkboxTheme,
+    listTileTheme: listTileTheme,
     menuBarTheme: MenuBarThemeData(
         style: MenuStyle(
             backgroundColor: MaterialStatePropertyAll(Color(0xFF121212)))),
@@ -762,6 +810,10 @@ void showToast(String text, {Duration timeout = const Duration(seconds: 2)}) {
   });
 }
 
+// TODO
+// - Remove argument "contentPadding", no need for it, all should look the same.
+// - Remove "required" for argument "content". See simple confirm dialog "delete peer", only title and actions are used. No need to "content: SizedBox.shrink()".
+// - Make dead code alive, transform arguments "onSubmit" and "onCancel" into correspondenting buttons "ConfirmOkButton", "CancelButton".
 class CustomAlertDialog extends StatelessWidget {
   const CustomAlertDialog(
       {Key? key,
@@ -789,8 +841,8 @@ class CustomAlertDialog extends StatelessWidget {
     Future.delayed(Duration.zero, () {
       if (!scopeNode.hasFocus) scopeNode.requestFocus();
     });
-    const double padding = 30;
     bool tabTapped = false;
+
     return FocusScope(
       node: scopeNode,
       autofocus: true,
@@ -815,23 +867,18 @@ class CustomAlertDialog extends StatelessWidget {
         return KeyEventResult.ignored;
       },
       child: AlertDialog(
-        scrollable: true,
-        title: title,
-        titlePadding: EdgeInsets.fromLTRB(padding, 24, padding, 0),
-        contentPadding: EdgeInsets.fromLTRB(
-          contentPadding ?? padding,
-          25,
-          contentPadding ?? padding,
-          actions is List ? 10 : padding,
-        ),
-        content: ConstrainedBox(
-          constraints: contentBoxConstraints,
-          child: content,
-        ),
-        actions: actions,
-        actionsPadding: EdgeInsets.fromLTRB(padding, 0, padding, padding),
-        actionsAlignment: MainAxisAlignment.center,
-      ),
+          scrollable: true,
+          title: title,
+          content: ConstrainedBox(
+            constraints: contentBoxConstraints,
+            child: content,
+          ),
+          actions: actions,
+          titlePadding: MyTheme.dialogTitlePadding(content: content != null),
+          contentPadding:
+              MyTheme.dialogContentPadding(actions: actions is List),
+          actionsPadding: MyTheme.dialogActionsPadding(),
+          buttonPadding: MyTheme.dialogButtonPadding),
     );
   }
 }
@@ -1107,25 +1154,32 @@ class AndroidPermissionManager {
   }
 }
 
+// TODO move this to mobile/widgets.
+// Used only for mobile, pages remote, settings, dialog
+// TODO remove argument contentPadding, it’s not used, getToggle() has not
 RadioListTile<T> getRadio<T>(
     String name, T toValue, T curValue, void Function(T?) onChange,
     {EdgeInsetsGeometry? contentPadding}) {
   return RadioListTile<T>(
-    contentPadding: contentPadding,
+    contentPadding: contentPadding ?? EdgeInsets.zero,
+    visualDensity: VisualDensity.compact,
     controlAffinity: ListTileControlAffinity.trailing,
     title: Text(translate(name)),
     value: toValue,
     groupValue: curValue,
     onChanged: onChange,
-    dense: true,
   );
 }
 
+// TODO move this to mobile/widgets.
+// Used only for mobile, pages remote, settings, dialog
 CheckboxListTile getToggle(
     String id, void Function(void Function()) setState, option, name,
     {FFI? ffi}) {
   final opt = bind.sessionGetToggleOptionSync(id: id, arg: option);
   return CheckboxListTile(
+      contentPadding: EdgeInsets.zero,
+      visualDensity: VisualDensity.compact,
       value: opt,
       onChanged: (v) {
         setState(() {
@@ -1135,7 +1189,6 @@ CheckboxListTile getToggle(
           (ffi ?? gFFI).qualityMonitorModel.checkShowQualityMonitor(id);
         }
       },
-      dense: true,
       title: Text(translate(name)));
 }
 
@@ -1514,9 +1567,14 @@ bool checkArguments() {
     return false;
   }
   String? id =
-      kBootArgs.length < connectIndex + 1 ? null : kBootArgs[connectIndex + 1];
+      kBootArgs.length <= connectIndex + 1 ? null : kBootArgs[connectIndex + 1];
+  String? password =
+      kBootArgs.length <= connectIndex + 2 ? null : kBootArgs[connectIndex + 2];
+  if (password != null && password.startsWith("--")) {
+    password = null;
+  }
   final switchUuidIndex = kBootArgs.indexOf("--switch_uuid");
-  String? switchUuid = kBootArgs.length < switchUuidIndex + 1
+  String? switchUuid = kBootArgs.length <= switchUuidIndex + 1
       ? null
       : kBootArgs[switchUuidIndex + 1];
   if (id != null) {
@@ -1528,7 +1586,8 @@ bool checkArguments() {
       kBootArgs.removeAt(connectIndex);
       // fallback to peer id
       Future.delayed(Duration.zero, () {
-        rustDeskWinManager.newRemoteDesktop(id, switch_uuid: switchUuid);
+        rustDeskWinManager.newRemoteDesktop(id,
+            password: password, switch_uuid: switchUuid);
       });
       return true;
     }
@@ -1809,10 +1868,15 @@ class ServerConfig {
   /// also see [encode]
   /// throw when decoding failure
   ServerConfig.decode(String msg) {
-    final input = msg.split('').reversed.join('');
-    final bytes = base64Decode(base64.normalize(input));
-    final json = jsonDecode(utf8.decode(bytes));
-
+    var json = {};
+    try {
+      // back compatible
+      json = jsonDecode(msg);
+    } catch (err) {
+      final input = msg.split('').reversed.join('');
+      final bytes = base64Decode(base64.normalize(input));
+      json = jsonDecode(utf8.decode(bytes));
+    }
     idServer = json['host'] ?? '';
     relayServer = json['relay'] ?? '';
     apiServer = json['api'] ?? '';

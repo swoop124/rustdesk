@@ -473,8 +473,15 @@ pub static ref T: std::collections::HashMap<&'static str, &'static str> =
         ("empty_favorite_tip", "هنوز همتای مورد علاقه‌ای ندارید؟\nبیایید فردی را برای ارتباط پیدا کنیم و آن را به موارد دلخواه خود اضافه کنیم!"),
         ("empty_lan_tip", "اوه نه، به نظر می رسد که ما هنوز همتای خود را پیدا نکرده ایم"),
         ("empty_address_book_tip", "اوه ، به نظر می رسد که در حال حاضر هیچ همتایی در دفترچه آدرس شما وجود ندارد"),
-        ("eg: admin", ""),
-        ("Empty Username", ""),
-        ("Empty Password", ""),
+        ("eg: admin", "مثال : admin"),
+        ("Empty Username", "نام کاربری خالی است"),
+        ("Empty Password", "رمز عبور خالی است"),
+        ("Me", "من"),
+        ("identical_file_tip", "این فایل با فایل همتا یکسان است."),
+        ("show_monitors_tip", "نمایش مانیتورها در نوار ابزار"),
+        ("View Mode", ""),
+        ("enter_rustdesk_passwd_tip", ""),
+        ("remember_rustdesk_passwd_tip", ""),
+        ("login_linux_tip", ""),
     ].iter().cloned().collect();
 }

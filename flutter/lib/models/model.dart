@@ -1,12 +1,9 @@
 import 'dart:async';
 import 'dart:convert';
-import 'dart:ffi' hide Size;
 import 'dart:io';
 import 'dart:math';
-import 'dart:typed_data';
 import 'dart:ui' as ui;
 
-import 'package:ffi/ffi.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_hbb/consts.dart';
@@ -28,7 +25,7 @@ import 'package:get/get.dart';
 
 import '../common.dart';
 import '../utils/image.dart' as img;
-import '../mobile/widgets/dialog.dart';
+import '../common/widgets/dialog.dart';
 import 'input_model.dart';
 import 'platform_model.dart';
 
@@ -47,6 +44,7 @@ class FfiModel with ChangeNotifier {
   bool _touchMode = false;
   Timer? _timer;
   var _reconnects = 1;
+  bool _viewOnly = false;
   WeakReference<FFI> parent;
 
   Map<String, bool> get permissions => _permissions;
@@ -64,6 +62,8 @@ class FfiModel with ChangeNotifier {
   bool get touchMode => _touchMode;
 
   bool get isPeerAndroid => _pi.platform == kPeerPlatformAndroid;
+
+  bool get viewOnly => _viewOnly;
 
   set inputBlocked(v) {
     _inputBlocked = v;
@@ -93,7 +93,7 @@ class FfiModel with ChangeNotifier {
     notifyListeners();
   }
 
-  bool keyboard() => _permissions['keyboard'] != false;
+  bool get keyboard => _permissions['keyboard'] != false;
 
   clear() {
     _pi = PeerInfo();
@@ -173,7 +173,7 @@ class FfiModel with ChangeNotifier {
       } else if (name == 'job_error') {
         parent.target?.fileModel.jobController.jobError(evt);
       } else if (name == 'override_file_confirm') {
-        parent.target?.fileModel.overrideFileConfirm(evt);
+        parent.target?.fileModel.postOverrideFileConfirm(evt);
       } else if (name == 'load_last_job') {
         parent.target?.fileModel.jobController.loadLastJob(evt);
       } else if (name == 'update_folder_files') {
@@ -293,6 +293,11 @@ class FfiModel with ChangeNotifier {
       wrongPasswordDialog(id, dialogManager, type, title, text);
     } else if (type == 'input-password') {
       enterPasswordDialog(id, dialogManager);
+    } else if (type == 'xsession-login' || type == 'xsession-re-login') {
+      // to-do
+    } else if (type == 'xsession-login-password' ||
+        type == 'xsession-login-password') {
+      // to-do
     } else if (type == 'restarting') {
       showMsgBox(id, type, title, text, link, false, dialogManager,
           hasCancel: false);
@@ -373,7 +378,8 @@ class FfiModel with ChangeNotifier {
   _updateSessionWidthHeight(String id) {
     parent.target?.canvasModel.updateViewStyle();
     if (display.width <= 0 || display.height <= 0) {
-      debugPrintStack(label: 'invalid display size (${display.width},${display.height})');
+      debugPrintStack(
+          label: 'invalid display size (${display.width},${display.height})');
     } else {
       bind.sessionSetSize(id: id, width: display.width, height: display.height);
     }
@@ -398,10 +404,12 @@ class FfiModel with ChangeNotifier {
       //
     }
 
+    final connType = parent.target?.connType;
+
     if (isPeerAndroid) {
       _touchMode = true;
-      if (parent.target != null &&
-          parent.target!.connType == ConnType.defaultConn &&
+      if (connType == ConnType.defaultConn &&
+          parent.target != null &&
           parent.target!.ffiModel.permissions['keyboard'] != false) {
         Timer(
             const Duration(milliseconds: 100),
@@ -413,10 +421,9 @@ class FfiModel with ChangeNotifier {
           await bind.sessionGetOption(id: peerId, arg: 'touch-mode') != '';
     }
 
-    if (parent.target != null &&
-        parent.target!.connType == ConnType.fileTransfer) {
+    if (connType == ConnType.fileTransfer) {
       parent.target?.fileModel.onReady();
-    } else {
+    } else if (connType == ConnType.defaultConn) {
       _pi.displays = [];
       List<dynamic> displays = json.decode(evt['displays']);
       for (int i = 0; i < displays.length; ++i) {
@@ -445,6 +452,20 @@ class FfiModel with ChangeNotifier {
       _pi.features.privacyMode = features['privacy_mode'] == 1;
       handleResolutions(peerId, evt["resolutions"]);
       parent.target?.elevationModel.onPeerInfo(_pi);
+    }
+    if (connType == ConnType.defaultConn) {
+      setViewOnly(peerId,
+          bind.sessionGetToggleOptionSync(id: peerId, arg: 'view-only'));
+    }
+    if (connType == ConnType.defaultConn) {
+      final platform_additions = evt['platform_additions'];
+      if (platform_additions != null && platform_additions != '') {
+        try {
+          _pi.platform_additions = json.decode(platform_additions);
+        } catch (e) {
+          debugPrint('Failed to decode platform_additions $e');
+        }
+      }
     }
     notifyListeners();
   }
@@ -516,6 +537,27 @@ class FfiModel with ChangeNotifier {
       //
     }
   }
+
+  void setViewOnly(String id, bool value) {
+    if (version_cmp(_pi.version, '1.2.0') < 0) return;
+    // tmp fix for https://github.com/rustdesk/rustdesk/pull/3706#issuecomment-1481242389
+    // because below rx not used in mobile version, so not initialized, below code will cause crash
+    // current our flutter code quality is fucking shit now. !!!!!!!!!!!!!!!!
+    try {
+      if (value) {
+        ShowRemoteCursorState.find(id).value = value;
+      } else {
+        ShowRemoteCursorState.find(id).value =
+            bind.sessionGetToggleOptionSync(id: id, arg: 'show-remote-cursor');
+      }
+    } catch (e) {
+      //
+    }
+    if (_viewOnly != value) {
+      _viewOnly = value;
+      notifyListeners();
+    }
+  }
 }
 
 class ImageModel with ChangeNotifier {
@@ -534,7 +576,13 @@ class ImageModel with ChangeNotifier {
   addCallbackOnFirstImage(Function(String) cb) => callbacksOnFirstImage.add(cb);
 
   onRgba(Uint8List rgba) {
-    if (_waitForImage[id]!) {
+    final waitforImage = _waitForImage[id];
+    if (waitforImage == null) {
+      debugPrint('Exception, peer $id not found for waiting image');
+      return;
+    }
+
+    if (waitforImage == true) {
       _waitForImage[id] = false;
       parent.target?.dialogManager.dismissAll();
       if (isDesktop) {
@@ -858,7 +906,7 @@ class CanvasModel with ChangeNotifier {
     }
 
     // If keyboard is not permitted, do not move cursor when mouse is moving.
-    if (parent.target != null && parent.target!.ffiModel.keyboard()) {
+    if (parent.target != null && parent.target!.ffiModel.keyboard) {
       // Draw cursor if is not desktop.
       if (!isDesktop) {
         parent.target!.cursorModel.moveLocal(x, y);
@@ -1511,6 +1559,7 @@ class FFI {
       {bool isFileTransfer = false,
       bool isPortForward = false,
       String? switchUuid,
+      String? password,
       bool? forceRelay}) {
     assert(!(isFileTransfer && isPortForward), 'more than one connect type');
     if (isFileTransfer) {
@@ -1521,17 +1570,20 @@ class FFI {
       id = 'pf_$id';
     } else {
       chatModel.resetClientMode();
+      connType = ConnType.defaultConn;
       canvasModel.id = id;
       imageModel.id = id;
       cursorModel.id = id;
     }
     // ignore: unused_local_variable
     final addRes = bind.sessionAddSync(
-        id: id,
-        isFileTransfer: isFileTransfer,
-        isPortForward: isPortForward,
-        switchUuid: switchUuid ?? "",
-        forceRelay: forceRelay ?? false);
+      id: id,
+      isFileTransfer: isFileTransfer,
+      isPortForward: isPortForward,
+      switchUuid: switchUuid ?? "",
+      forceRelay: forceRelay ?? false,
+      password: password ?? "",
+    );
     final stream = bind.sessionStart(id: id);
     final cb = ffiModel.startEventListener(id);
     () async {
@@ -1664,6 +1716,9 @@ class PeerInfo {
   List<Display> displays = [];
   Features features = Features();
   List<Resolution> resolutions = [];
+  Map<String, dynamic> platform_additions = {};
+
+  bool get is_wayland => platform_additions['is_wayland'] == true;
 }
 
 const canvasKey = 'canvas';

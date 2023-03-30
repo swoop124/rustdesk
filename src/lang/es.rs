@@ -473,8 +473,15 @@ pub static ref T: std::collections::HashMap<&'static str, &'static str> =
         ("empty_favorite_tip", "¿Sin pares favoritos aún?\nEncuentra uno al que conectarte y añádelo a favoritos!"),
         ("empty_lan_tip", "Oh no, parece que aún no has descubierto ningún par."),
         ("empty_address_book_tip", "Parece que actualmente no hay pares en tu libreta de direcciones."),
-        ("eg: admin", ""),
-        ("Empty Username", ""),
-        ("Empty Password", ""),
+        ("eg: admin", "ej.: admin"),
+        ("Empty Username", "Nombre de usuario vacío"),
+        ("Empty Password", "Contraseña vacía"),
+        ("Me", "Yo"),
+        ("identical_file_tip", "Este archivo es idéntico al del par."),
+        ("show_monitors_tip", "Mostrar monitores en la barra de herramientas"),
+        ("View Mode", "Modo Vista"),
+        ("enter_rustdesk_passwd_tip", "Introduzca la contraseña de RustDesk"),
+        ("remember_rustdesk_passwd_tip", "Recordar la contraseña de RustDesk"),
+        ("login_linux_tip", "Iniciar sesión para la cuenta remota de Linux"),
     ].iter().cloned().collect();
 }

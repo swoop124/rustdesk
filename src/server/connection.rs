@@ -7,8 +7,7 @@ use crate::common::update_clipboard;
 use crate::portable_service::client as portable_client;
 use crate::{
     client::{
-        new_voice_call_request, new_voice_call_response, start_audio_thread, LatencyController,
-        MediaData, MediaSender,
+        new_voice_call_request, new_voice_call_response, start_audio_thread, MediaData, MediaSender,
     },
     common::{get_default_sound_input, set_sound_input},
     video_service,
@@ -65,7 +64,9 @@ pub struct ConnInner {
 }
 
 enum MessageInput {
+    #[cfg(not(any(target_os = "android", target_os = "ios")))]
     Mouse((MouseEvent, i32)),
+    #[cfg(not(any(target_os = "android", target_os = "ios")))]
     Key((KeyEvent, bool)),
     BlockOn,
     BlockOff,
@@ -103,6 +104,9 @@ pub struct Connection {
     show_remote_cursor: bool,
     // by peer
     ip: String,
+    // by peer
+    disable_keyboard: bool,
+    // by peer
     disable_clipboard: bool,
     // by peer
     disable_audio: bool,
@@ -123,6 +127,7 @@ pub struct Connection {
     #[cfg(windows)]
     portable: PortableState,
     from_switch: bool,
+    #[cfg(not(any(target_os = "android", target_os = "ios")))]
     origin_resolution: HashMap<String, Resolution>,
     voice_call_request_timestamp: Option<NonZeroI64>,
     audio_input_device_before_voice_call: Option<String>,
@@ -185,9 +190,10 @@ impl Connection {
         let (tx_to_cm, rx_to_cm) = mpsc::unbounded_channel::<ipc::Data>();
         let (tx, mut rx) = mpsc::unbounded_channel::<(Instant, Arc<Message>)>();
         let (tx_video, mut rx_video) = mpsc::unbounded_channel::<(Instant, Arc<Message>)>();
-        let (tx_input, rx_input) = std_mpsc::channel();
+        let (tx_input, _rx_input) = std_mpsc::channel();
         let mut hbbs_rx = crate::hbbs_http::sync::signal_receiver();
 
+        #[cfg(not(any(target_os = "android", target_os = "ios")))]
         let tx_cloned = tx.clone();
         let mut conn = Self {
             inner: ConnInner {
@@ -219,6 +225,7 @@ impl Connection {
             disable_audio: false,
             enable_file_transfer: false,
             disable_clipboard: false,
+            disable_keyboard: false,
             tx_input,
             video_ack_required: false,
             peer_info: Default::default(),
@@ -230,6 +237,7 @@ impl Connection {
             #[cfg(windows)]
             portable: Default::default(),
             from_switch: false,
+            #[cfg(not(any(target_os = "android", target_os = "ios")))]
             origin_resolution: Default::default(),
             audio_sender: None,
             voice_call_request_timestamp: None,
@@ -279,7 +287,7 @@ impl Connection {
         );
 
         #[cfg(not(any(target_os = "android", target_os = "ios")))]
-        std::thread::spawn(move || Self::handle_input(rx_input, tx_cloned));
+        std::thread::spawn(move || Self::handle_input(_rx_input, tx_cloned));
         let mut second_timer = time::interval(Duration::from_secs(1));
 
         loop {
@@ -327,7 +335,7 @@ impl Connection {
                                 if let Some(s) = conn.server.upgrade() {
                                     s.write().unwrap().subscribe(
                                         super::clipboard_service::NAME,
-                                        conn.inner.clone(), conn.clipboard_enabled() && conn.keyboard);
+                                        conn.inner.clone(), conn.clipboard_enabled() && conn.peer_keyboard_enabled());
                                 }
                             } else if &name == "audio" {
                                 conn.audio = enabled;
@@ -608,6 +616,9 @@ impl Connection {
                 }
             }
         }
+        #[cfg(target_os = "linux")]
+        clear_remapped_keycode();
+        release_modifiers();
         log::info!("Input thread exited");
     }
 
@@ -837,6 +848,18 @@ impl Connection {
             pi.hostname = DEVICE_NAME.lock().unwrap().clone();
             pi.platform = "Android".into();
         }
+        #[cfg(target_os = "linux")]
+        {
+            let mut platform_additions = serde_json::Map::new();
+            if crate::platform::current_is_wayland() {
+                platform_additions.insert("is_wayland".into(), json!(true));
+            }
+            if !platform_additions.is_empty() {
+                pi.platform_additions =
+                    serde_json::to_string(&platform_additions).unwrap_or("".into());
+            }
+        }
+
         #[cfg(feature = "hwcodec")]
         {
             let (h264, h265) = scrap::codec::Encoder::supported_encoding();
@@ -939,13 +962,13 @@ impl Connection {
         } else if sub_service {
             if let Some(s) = self.server.upgrade() {
                 let mut noperms = Vec::new();
-                if !self.keyboard && !self.show_remote_cursor {
+                if !self.peer_keyboard_enabled() && !self.show_remote_cursor {
                     noperms.push(NAME_CURSOR);
                 }
                 if !self.show_remote_cursor {
                     noperms.push(NAME_POS);
                 }
-                if !self.clipboard_enabled() || !self.keyboard {
+                if !self.clipboard_enabled() || !self.peer_keyboard_enabled() {
                     noperms.push(super::clipboard_service::NAME);
                 }
                 if !self.audio_enabled() {
@@ -957,6 +980,10 @@ impl Connection {
                 s.add_connection(self.inner.clone(), &noperms);
             }
         }
+    }
+
+    fn peer_keyboard_enabled(&self) -> bool {
+        self.keyboard && !self.disable_keyboard
     }
 
     fn clipboard_enabled(&self) -> bool {
@@ -1021,11 +1048,13 @@ impl Connection {
     }
 
     #[inline]
+    #[cfg(not(any(target_os = "android", target_os = "ios")))]
     fn input_mouse(&self, msg: MouseEvent, conn_id: i32) {
         self.tx_input.send(MessageInput::Mouse((msg, conn_id))).ok();
     }
 
     #[inline]
+    #[cfg(not(any(target_os = "android", target_os = "ios")))]
     fn input_key(&self, msg: KeyEvent, press: bool) {
         self.tx_input.send(MessageInput::Key((msg, press))).ok();
     }
@@ -1312,7 +1341,7 @@ impl Connection {
                         log::debug!("call_main_service_mouse_input fail:{}", e);
                     }
                     #[cfg(not(any(target_os = "android", target_os = "ios")))]
-                    if self.keyboard {
+                    if self.peer_keyboard_enabled() {
                         if is_left_up(&me) {
                             CLICK_TIME.store(get_time(), Ordering::SeqCst);
                         } else {
@@ -1321,9 +1350,11 @@ impl Connection {
                         self.input_mouse(me, self.inner.id());
                     }
                 }
+                #[cfg(any(target_os = "android", target_os = "ios"))]
+                Some(message::Union::KeyEvent(..)) => {}
+                #[cfg(not(any(target_os = "android", target_os = "ios")))]
                 Some(message::Union::KeyEvent(me)) => {
-                    #[cfg(not(any(target_os = "android", target_os = "ios")))]
-                    if self.keyboard {
+                    if self.peer_keyboard_enabled() {
                         if is_enter(&me) {
                             CLICK_TIME.store(get_time(), Ordering::SeqCst);
                         }
@@ -1350,11 +1381,11 @@ impl Connection {
                         }
                     }
                 }
-                Some(message::Union::Clipboard(cb)) =>
+                Some(message::Union::Clipboard(_cb)) =>
                 {
                     #[cfg(not(any(target_os = "android", target_os = "ios")))]
                     if self.clipboard {
-                        update_clipboard(cb, None);
+                        update_clipboard(_cb, None);
                     }
                 }
                 Some(message::Union::Cliprdr(_clip)) => {
@@ -1591,11 +1622,7 @@ impl Connection {
                         if !self.disable_audio {
                             // Drop the audio sender previously.
                             drop(std::mem::replace(&mut self.audio_sender, None));
-                            // Start a audio thread to play the audio sent by peer.
-                            let latency_controller = LatencyController::new();
-                            // No video frame will be sent here, so we need to disable latency controller, or audio check may fail.
-                            latency_controller.lock().unwrap().set_audio_only(true);
-                            self.audio_sender = Some(start_audio_thread(Some(latency_controller)));
+                            self.audio_sender = Some(start_audio_thread());
                             allow_err!(self
                                 .audio_sender
                                 .as_ref()
@@ -1642,7 +1669,7 @@ impl Connection {
                 Some(message::Union::AudioFrame(frame)) => {
                     if !self.disable_audio {
                         if let Some(sender) = &self.audio_sender {
-                            allow_err!(sender.send(MediaData::AudioFrame(frame)));
+                            allow_err!(sender.send(MediaData::AudioFrame(Box::new(frame))));
                         } else {
                             log::warn!(
                                 "Processing audio frame without the voice call audio sender."
@@ -1750,7 +1777,7 @@ impl Connection {
                     s.write().unwrap().subscribe(
                         NAME_CURSOR,
                         self.inner.clone(),
-                        self.keyboard || self.show_remote_cursor,
+                        self.peer_keyboard_enabled() || self.show_remote_cursor,
                     );
                     s.write().unwrap().subscribe(
                         NAME_POS,
@@ -1788,7 +1815,24 @@ impl Connection {
                     s.write().unwrap().subscribe(
                         super::clipboard_service::NAME,
                         self.inner.clone(),
-                        self.clipboard_enabled() && self.keyboard,
+                        self.clipboard_enabled() && self.peer_keyboard_enabled(),
+                    );
+                }
+            }
+        }
+        if let Ok(q) = o.disable_keyboard.enum_value() {
+            if q != BoolOption::NotSet {
+                self.disable_keyboard = q == BoolOption::Yes;
+                if let Some(s) = self.server.upgrade() {
+                    s.write().unwrap().subscribe(
+                        super::clipboard_service::NAME,
+                        self.inner.clone(),
+                        self.clipboard_enabled() && self.peer_keyboard_enabled(),
+                    );
+                    s.write().unwrap().subscribe(
+                        NAME_CURSOR,
+                        self.inner.clone(),
+                        self.peer_keyboard_enabled() || self.show_remote_cursor,
                     );
                 }
             }

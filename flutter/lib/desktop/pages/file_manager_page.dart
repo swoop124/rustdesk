@@ -802,7 +802,7 @@ class _FileManagerViewState extends State<FileManagerView> {
         switchType: SwitchType.scheckbox,
         text: translate("Show Hidden Files"),
         getter: () async {
-          return controller.options.value.isWindows;
+          return controller.options.value.showHidden;
         },
         setter: (bool v) async {
           controller.toggleShowHidden();
@@ -1312,6 +1312,7 @@ class _FileManagerViewState extends State<FileManagerView> {
                               },
                               dismissOnClicked: true));
                         }
+                        menuItems.add(MenuEntryDivider());
                       } catch (e) {
                         debugPrint("buildBread fetchDirectory err=$e");
                       } finally {
@@ -1320,7 +1321,6 @@ class _FileManagerViewState extends State<FileManagerView> {
                         }
                       }
                     }
-                    menuItems.add(MenuEntryDivider());
                     mod_menu.showMenu(
                         context: context,
                         position: RelativeRect.fromLTRB(x, y, x, y),
