@@ -43,6 +43,8 @@ pub struct Session<T: InvokeUiSession> {
     pub server_keyboard_enabled: Arc<RwLock<bool>>,
     pub server_file_transfer_enabled: Arc<RwLock<bool>>,
     pub server_clipboard_enabled: Arc<RwLock<bool>>,
+    #[cfg(not(any(target_os = "android", target_os = "ios")))]
+    pub old_clipboard: Arc<Mutex<String>>,
 }
 
 #[derive(Clone)]
@@ -529,22 +531,22 @@ impl<T: InvokeUiSession> Session<T> {
     pub fn handle_flutter_key_event(
         &self,
         _name: &str,
-        keycode: i32,
-        scancode: i32,
+        platform_code: i32,
+        position_code: i32,
         lock_modes: i32,
         down_or_up: bool,
     ) {
-        if scancode < 0 || keycode < 0 {
+        if position_code < 0 || platform_code < 0 {
             return;
         }
-        let keycode: KeyCode = keycode as _;
-        let scancode: u32 = scancode as _;
+        let platform_code: u32 = platform_code as _;
+        let position_code: KeyCode = position_code as _;
 
         #[cfg(not(target_os = "windows"))]
-        let key = rdev::key_from_code(keycode) as rdev::Key;
+        let key = rdev::key_from_code(position_code) as rdev::Key;
         // Windows requires special handling
         #[cfg(target_os = "windows")]
-        let key = rdev::get_win_key(keycode, scancode);
+        let key = rdev::get_win_key(platform_code, position_code);
 
         let event_type = if down_or_up {
             KeyPress(key)
@@ -554,9 +556,9 @@ impl<T: InvokeUiSession> Session<T> {
         let event = Event {
             time: SystemTime::now(),
             unicode: None,
-            platform_code: keycode as _,
-            position_code: scancode as _,
-            event_type: event_type,
+            platform_code,
+            position_code: position_code as _,
+            event_type,
         };
         keyboard::client::process_event(&event, Some(lock_modes));
     }
@@ -1162,7 +1164,7 @@ pub async fn io_loop<T: InvokeUiSession>(handler: Session<T>) {
     let frame_count = Arc::new(AtomicUsize::new(0));
     let frame_count_cl = frame_count.clone();
     let ui_handler = handler.ui_handler.clone();
-    let (video_sender, audio_sender, video_queue) =
+    let (video_sender, audio_sender, video_queue, decode_fps) =
         start_video_audio_threads(move |data: &mut Vec<u8>| {
             frame_count_cl.fetch_add(1, Ordering::Relaxed);
             ui_handler.on_rgba(data);
@@ -1176,6 +1178,7 @@ pub async fn io_loop<T: InvokeUiSession>(handler: Session<T>) {
         receiver,
         sender,
         frame_count,
+        decode_fps,
     );
     remote.io_loop(&key, &token).await;
     remote.sync_jobs_status_to_local().await;

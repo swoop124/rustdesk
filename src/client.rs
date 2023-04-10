@@ -3,7 +3,10 @@ use std::{
     net::SocketAddr,
     ops::Deref,
     str::FromStr,
-    sync::{mpsc, Arc, Mutex, RwLock},
+    sync::{
+        atomic::{AtomicUsize, Ordering},
+        mpsc, Arc, Mutex, RwLock,
+    },
 };
 
 pub use async_trait::async_trait;
@@ -21,6 +24,7 @@ use sha2::{Digest, Sha256};
 use uuid::Uuid;
 
 pub use file_trait::FileManager;
+#[cfg(not(feature = "flutter"))]
 #[cfg(not(any(target_os = "android", target_os = "ios")))]
 use hbb_common::tokio::sync::mpsc::UnboundedSender;
 use hbb_common::{
@@ -55,10 +59,10 @@ use crate::{
 };
 
 #[cfg(not(any(target_os = "android", target_os = "ios")))]
-use crate::{
-    common::{check_clipboard, ClipboardContext, CLIPBOARD_INTERVAL},
-    ui_session_interface::SessionPermissionConfig,
-};
+use crate::common::{check_clipboard, ClipboardContext, CLIPBOARD_INTERVAL};
+#[cfg(not(feature = "flutter"))]
+#[cfg(not(any(target_os = "android", target_os = "ios")))]
+use crate::ui_session_interface::SessionPermissionConfig;
 
 pub use super::lang::*;
 
@@ -632,7 +636,7 @@ impl Client {
     }
 
     #[cfg(not(any(target_os = "android", target_os = "ios")))]
-    fn try_start_clipboard(_conf_tx: Option<(SessionPermissionConfig, UnboundedSender<Data>)>) {
+    fn try_start_clipboard(_conf_tx: Option<ClientClipboardContext>) {
         let mut clipboard_lock = TEXT_CLIPBOARD_STATE.lock().unwrap();
         if clipboard_lock.running {
             return;
@@ -657,11 +661,17 @@ impl Client {
 
                         if let Some(msg) = check_clipboard(&mut ctx, Some(&OLD_CLIPBOARD_TEXT)) {
                             #[cfg(feature = "flutter")]
-                            crate::flutter::send_text_clipboard_msg(msg);
+                            crate::flutter::send_text_clipboard_msg(
+                                &*OLD_CLIPBOARD_TEXT.lock().unwrap(),
+                                msg,
+                            );
                             #[cfg(not(feature = "flutter"))]
-                            if let Some((cfg, tx)) = &_conf_tx {
-                                if cfg.is_text_clipboard_required() {
-                                    let _ = tx.send(Data::Message(msg));
+                            if let Some(ctx) = &_ctx {
+                                if ctx.cfg.is_text_clipboard_required()
+                                    && *OLD_CLIPBOARD_TEXT.lock().unwrap()
+                                        != *ctx.old.lock().unwrap()
+                                {
+                                    let _ = ctx.tx.send(Data::Message(msg));
                                 }
                             }
                         }
@@ -1291,10 +1301,11 @@ impl LoginConfigHandler {
                 config.custom_image_quality[0]
             };
             msg.custom_image_quality = quality << 8;
+            #[cfg(feature = "flutter")]
+            if let Some(custom_fps) = self.options.get("custom-fps") {
+                msg.custom_fps = custom_fps.parse().unwrap_or(30);
+            }
             n += 1;
-        }
-        if let Some(custom_fps) = self.options.get("custom-fps") {
-            msg.custom_fps = custom_fps.parse().unwrap_or(30);
         }
         let view_only = self.get_toggle_option("view-only");
         if view_only {
@@ -1677,7 +1688,12 @@ pub type MediaSender = mpsc::Sender<MediaData>;
 /// * `video_callback` - The callback for video frame. Being called when a video frame is ready.
 pub fn start_video_audio_threads<F>(
     video_callback: F,
-) -> (MediaSender, MediaSender, Arc<ArrayQueue<VideoFrame>>)
+) -> (
+    MediaSender,
+    MediaSender,
+    Arc<ArrayQueue<VideoFrame>>,
+    Arc<AtomicUsize>,
+)
 where
     F: 'static + FnMut(&mut Vec<u8>) + Send,
 {
@@ -1685,21 +1701,48 @@ where
     let video_queue = Arc::new(ArrayQueue::<VideoFrame>::new(VIDEO_QUEUE_SIZE));
     let video_queue_cloned = video_queue.clone();
     let mut video_callback = video_callback;
+    let mut duration = std::time::Duration::ZERO;
+    let mut count = 0;
+    let fps = Arc::new(AtomicUsize::new(0));
+    let decode_fps = fps.clone();
+    let mut skip_beginning = 0;
 
     std::thread::spawn(move || {
         let mut video_handler = VideoHandler::new();
         loop {
             if let Ok(data) = video_receiver.recv() {
                 match data {
-                    MediaData::VideoFrame(vf) => {
-                        if let Ok(true) = video_handler.handle_frame(*vf) {
+                    MediaData::VideoFrame(_) | MediaData::VideoQueue => {
+                        let vf = if let MediaData::VideoFrame(vf) = data {
+                            *vf
+                        } else {
+                            if let Some(vf) = video_queue.pop() {
+                                vf
+                            } else {
+                                continue;
+                            }
+                        };
+                        let start = std::time::Instant::now();
+                        if let Ok(true) = video_handler.handle_frame(vf) {
                             video_callback(&mut video_handler.rgb);
-                        }
-                    }
-                    MediaData::VideoQueue => {
-                        if let Some(vf) = video_queue.pop() {
-                            if let Ok(true) = video_handler.handle_frame(vf) {
-                                video_callback(&mut video_handler.rgb);
+                            // fps calculation
+                            // The first frame will be very slow
+                            if skip_beginning < 5 {
+                                skip_beginning += 1;
+                                continue;
+                            }
+                            duration += start.elapsed();
+                            count += 1;
+                            if count % 10 == 0 {
+                                fps.store(
+                                    (count * 1000 / duration.as_millis()) as usize,
+                                    Ordering::Relaxed,
+                                );
+                            }
+                            // Clear to get real-time fps
+                            if count > 300 {
+                                count = 0;
+                                duration = Duration::ZERO;
                             }
                         }
                     }
@@ -1718,7 +1761,7 @@ where
         log::info!("Video decoder loop exits");
     });
     let audio_sender = start_audio_thread();
-    return (video_sender, audio_sender, video_queue_cloned);
+    return (video_sender, audio_sender, video_queue_cloned, decode_fps);
 }
 
 /// Start an audio thread
@@ -2386,4 +2429,16 @@ fn decode_id_pk(signed: &[u8], key: &sign::PublicKey) -> ResultType<(String, [u8
     } else {
         bail!("Wrong public length");
     }
+}
+
+#[cfg(feature = "flutter")]
+#[cfg(not(any(target_os = "android", target_os = "ios")))]
+pub(crate) struct ClientClipboardContext;
+
+#[cfg(not(feature = "flutter"))]
+#[cfg(not(any(target_os = "android", target_os = "ios")))]
+pub(crate) struct ClientClipboardContext {
+    pub cfg: SessionPermissionConfig,
+    pub old: Arc<Mutex<String>>,
+    pub tx: UnboundedSender<Data>,
 }

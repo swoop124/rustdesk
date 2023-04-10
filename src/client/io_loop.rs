@@ -1,7 +1,5 @@
 use std::collections::HashMap;
 use std::num::NonZeroI64;
-#[cfg(not(any(target_os = "android", target_os = "ios")))]
-use std::sync::Mutex;
 use std::sync::{
     atomic::{AtomicUsize, Ordering},
     Arc,
@@ -51,8 +49,6 @@ pub struct Remote<T: InvokeUiSession> {
     // Stop sending local audio to remote client.
     stop_voice_call_sender: Option<std::sync::mpsc::Sender<()>>,
     voice_call_request_timestamp: Option<NonZeroI64>,
-    #[cfg(not(any(target_os = "android", target_os = "ios")))]
-    old_clipboard: Arc<Mutex<String>>,
     read_jobs: Vec<fs::TransferJob>,
     write_jobs: Vec<fs::TransferJob>,
     remove_jobs: HashMap<i32, RemoveJob>,
@@ -65,6 +61,8 @@ pub struct Remote<T: InvokeUiSession> {
     frame_count: Arc<AtomicUsize>,
     video_format: CodecFormat,
     elevation_requested: bool,
+    fps_control: FpsControl,
+    decode_fps: Arc<AtomicUsize>,
 }
 
 impl<T: InvokeUiSession> Remote<T> {
@@ -76,6 +74,7 @@ impl<T: InvokeUiSession> Remote<T> {
         receiver: mpsc::UnboundedReceiver<Data>,
         sender: mpsc::UnboundedSender<Data>,
         frame_count: Arc<AtomicUsize>,
+        decode_fps: Arc<AtomicUsize>,
     ) -> Self {
         Self {
             handler,
@@ -84,8 +83,6 @@ impl<T: InvokeUiSession> Remote<T> {
             audio_sender,
             receiver,
             sender,
-            #[cfg(not(any(target_os = "android", target_os = "ios")))]
-            old_clipboard: Default::default(),
             read_jobs: Vec::new(),
             write_jobs: Vec::new(),
             remove_jobs: Default::default(),
@@ -100,6 +97,8 @@ impl<T: InvokeUiSession> Remote<T> {
             stop_voice_call_sender: None,
             voice_call_request_timestamp: None,
             elevation_requested: false,
+            fps_control: Default::default(),
+            decode_fps,
         }
     }
 
@@ -147,6 +146,7 @@ impl<T: InvokeUiSession> Remote<T> {
                 let mut rx_clip_client = rx_clip_client_lock.lock().await;
 
                 let mut status_timer = time::interval(Duration::new(1, 0));
+                let mut fps_instant = Instant::now();
 
                 loop {
                     tokio::select! {
@@ -224,9 +224,18 @@ impl<T: InvokeUiSession> Remote<T> {
                             }
                         }
                         _ = status_timer.tick() => {
-                            let speed = self.data_count.swap(0, Ordering::Relaxed);
+                            self.fps_control();
+                            let elapsed = fps_instant.elapsed().as_millis();
+                            if elapsed < 1000 {
+                                continue;
+                            }
+                            fps_instant = Instant::now();
+                            let mut speed = self.data_count.swap(0, Ordering::Relaxed);
+                            speed = speed * 1000 / elapsed as usize;
                             let speed = format!("{:.2}kB/s", speed as f32 / 1024 as f32);
-                            let fps = self.frame_count.swap(0, Ordering::Relaxed) as _;
+                            let mut fps = self.frame_count.swap(0, Ordering::Relaxed) as _;
+                            // Correcting the inaccuracy of status_timer
+                            fps = fps * 1000 / elapsed as i32;
                             self.handler.update_quality_status(QualityStatus {
                                 speed:Some(speed),
                                 fps:Some(fps),
@@ -826,6 +835,52 @@ impl<T: InvokeUiSession> Remote<T> {
             None => false,
         }
     }
+    #[inline]
+    fn fps_control(&mut self) {
+        let len = self.video_queue.len();
+        let ctl = &mut self.fps_control;
+        // Current full speed decoding fps
+        let decode_fps = self.decode_fps.load(std::sync::atomic::Ordering::Relaxed);
+        // 500ms
+        let debounce = if decode_fps > 10 { decode_fps / 2 } else { 5 };
+        if len < debounce || decode_fps == 0 {
+            return;
+        }
+        // First setting , or the length of the queue still increases after setting, or exceed the size of the last setting again
+        if ctl.set_times < 10 // enough
+            && (ctl.set_times == 0
+                || (len > ctl.last_queue_size && ctl.last_set_instant.elapsed().as_secs() > 30))
+        {
+            // 80% fps to ensure decoding is faster than encoding
+            let mut custom_fps = decode_fps as i32 * 4 / 5;
+            if custom_fps < 1 {
+                custom_fps = 1;
+            }
+            // send custom fps
+            let mut misc = Misc::new();
+            misc.set_option(OptionMessage {
+                custom_fps,
+                ..Default::default()
+            });
+            let mut msg = Message::new();
+            msg.set_misc(misc);
+            self.sender.send(Data::Message(msg)).ok();
+            ctl.last_queue_size = len;
+            ctl.set_times += 1;
+            ctl.last_set_instant = Instant::now();
+        }
+        // send refresh
+        if ctl.refresh_times < 10 // enough
+            && (len > self.video_queue.capacity() / 2
+                    && (ctl.refresh_times == 0 || ctl.last_refresh_instant.elapsed().as_secs() > 30))
+        {
+            // Refresh causes client set_display, left frames cause flickering.
+            while let Some(_) = self.video_queue.pop() {}
+            self.handler.refresh_video();
+            ctl.refresh_times += 1;
+            ctl.last_refresh_instant = Instant::now();
+        }
+    }
 
     async fn handle_msg_from_peer(&mut self, data: &[u8], peer: &mut Stream) -> bool {
         if let Ok(msg_in) = Message::parse_from_bytes(&data) {
@@ -880,10 +935,11 @@ impl<T: InvokeUiSession> Remote<T> {
                             Client::try_start_clipboard(None);
                             #[cfg(not(feature = "flutter"))]
                             #[cfg(not(any(target_os = "android", target_os = "ios")))]
-                            Client::try_start_clipboard(Some((
-                                permission_config.clone(),
-                                sender.clone(),
-                            )));
+                            Client::try_start_clipboard(Some(ClientClipboardContext {
+                                cfg: permission_config.clone(),
+                                old: self.handler.old_clipboard.clone(),
+                                tx: sender.clone(),
+                            }));
 
                             #[cfg(not(any(target_os = "android", target_os = "ios")))]
                             tokio::spawn(async move {
@@ -916,7 +972,7 @@ impl<T: InvokeUiSession> Remote<T> {
                 Some(message::Union::Clipboard(cb)) => {
                     if !self.handler.lc.read().unwrap().disable_clipboard.v {
                         #[cfg(not(any(target_os = "android", target_os = "ios")))]
-                        update_clipboard(cb, Some(&self.old_clipboard));
+                        update_clipboard(cb, Some(&self.handler.old_clipboard));
                         #[cfg(any(target_os = "android", target_os = "ios"))]
                         {
                             let content = if cb.compress {
@@ -1486,6 +1542,26 @@ impl RemoveJob {
             path: self.path.clone(),
             is_remote: self.is_remote,
             no_confirm: self.no_confirm,
+        }
+    }
+}
+
+struct FpsControl {
+    last_queue_size: usize,
+    set_times: usize,
+    refresh_times: usize,
+    last_set_instant: Instant,
+    last_refresh_instant: Instant,
+}
+
+impl Default for FpsControl {
+    fn default() -> Self {
+        Self {
+            last_queue_size: Default::default(),
+            set_times: Default::default(),
+            refresh_times: Default::default(),
+            last_set_instant: Instant::now(),
+            last_refresh_instant: Instant::now(),
         }
     }
 }

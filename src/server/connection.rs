@@ -4,6 +4,7 @@ use crate::clipboard_file::*;
 #[cfg(not(any(target_os = "android", target_os = "ios")))]
 use crate::common::update_clipboard;
 #[cfg(all(target_os = "linux", feature = "linux_headless"))]
+#[cfg(not(any(feature = "flatpak", feature = "appimage")))]
 use crate::platform::linux_desktop_manager;
 #[cfg(windows)]
 use crate::portable_service::client as portable_client;
@@ -19,6 +20,7 @@ use crate::{common::DEVICE_NAME, flutter::connection_manager::start_channel};
 use crate::{ipc, VERSION};
 use cidr_utils::cidr::IpCidr;
 #[cfg(all(target_os = "linux", feature = "linux_headless"))]
+#[cfg(not(any(feature = "flatpak", feature = "appimage")))]
 use hbb_common::platform::linux::run_cmds;
 use hbb_common::{
     config::Config,
@@ -43,12 +45,14 @@ use sha2::{Digest, Sha256};
 #[cfg(not(any(target_os = "android", target_os = "ios")))]
 use std::sync::atomic::Ordering;
 use std::{
-    collections::HashSet,
     num::NonZeroI64,
     sync::{atomic::AtomicI64, mpsc as std_mpsc},
 };
 #[cfg(not(any(target_os = "android", target_os = "ios")))]
 use system_shutdown;
+
+#[cfg(not(any(target_os = "android", target_os = "ios")))]
+use std::collections::HashSet;
 
 pub type Sender = mpsc::UnboundedSender<(Instant, Arc<Message>)>;
 
@@ -153,10 +157,13 @@ pub struct Connection {
     voice_call_request_timestamp: Option<NonZeroI64>,
     audio_input_device_before_voice_call: Option<String>,
     options_in_login: Option<OptionMessage>,
+    #[cfg(not(any(target_os = "android", target_os = "ios")))]
     pressed_modifiers: HashSet<rdev::Key>,
     #[cfg(all(target_os = "linux", feature = "linux_headless"))]
+    #[cfg(not(any(feature = "flatpak", feature = "appimage")))]
     rx_cm_stream_ready: mpsc::Receiver<()>,
     #[cfg(all(target_os = "linux", feature = "linux_headless"))]
+    #[cfg(not(any(feature = "flatpak", feature = "appimage")))]
     tx_desktop_ready: mpsc::Sender<()>,
 }
 
@@ -273,10 +280,13 @@ impl Connection {
             voice_call_request_timestamp: None,
             audio_input_device_before_voice_call: None,
             options_in_login: None,
+            #[cfg(not(any(target_os = "android", target_os = "ios")))]
             pressed_modifiers: Default::default(),
             #[cfg(all(target_os = "linux", feature = "linux_headless"))]
+            #[cfg(not(any(feature = "flatpak", feature = "appimage")))]
             rx_cm_stream_ready: _rx_cm_stream_ready,
             #[cfg(all(target_os = "linux", feature = "linux_headless"))]
+            #[cfg(not(any(feature = "flatpak", feature = "appimage")))]
             tx_desktop_ready: _tx_desktop_ready,
         };
         #[cfg(not(any(target_os = "android", target_os = "ios")))]
@@ -891,6 +901,7 @@ impl Connection {
                 platform_additions.insert("is_wayland".into(), json!(true));
             }
             #[cfg(feature = "linux_headless")]
+            #[cfg(not(any(feature = "flatpak", feature = "appimage")))]
             if linux_desktop_manager::is_headless() {
                 platform_additions.insert("headless".into(), json!(true));
             }
@@ -1258,6 +1269,7 @@ impl Connection {
             }
 
             #[cfg(all(target_os = "linux", feature = "linux_headless"))]
+            #[cfg(not(any(feature = "flatpak", feature = "appimage")))]
             let desktop_err = match lr.os_login.as_ref() {
                 Some(os_login) => {
                     linux_desktop_manager::try_start_desktop(&os_login.username, &os_login.password)
@@ -1265,12 +1277,15 @@ impl Connection {
                 None => linux_desktop_manager::try_start_desktop("", ""),
             };
             #[cfg(all(target_os = "linux", feature = "linux_headless"))]
+            #[cfg(not(any(feature = "flatpak", feature = "appimage")))]
             let is_headless = linux_desktop_manager::is_headless();
             #[cfg(all(target_os = "linux", feature = "linux_headless"))]
+            #[cfg(not(any(feature = "flatpak", feature = "appimage")))]
             let wait_ipc_timeout = 10_000;
 
             // If err is LOGIN_MSG_DESKTOP_SESSION_NOT_READY, just keep this msg and go on checking password.
             #[cfg(all(target_os = "linux", feature = "linux_headless"))]
+            #[cfg(not(any(feature = "flatpak", feature = "appimage")))]
             if !desktop_err.is_empty() && desktop_err != LOGIN_MSG_DESKTOP_SESSION_NOT_READY {
                 self.send_login_error(desktop_err).await;
                 return true;
@@ -1295,6 +1310,7 @@ impl Connection {
                 return false;
             } else if self.is_recent_session() {
                 #[cfg(all(target_os = "linux", feature = "linux_headless"))]
+                #[cfg(not(any(feature = "flatpak", feature = "appimage")))]
                 if desktop_err.is_empty() {
                     #[cfg(target_os = "linux")]
                     if is_headless {
@@ -1319,6 +1335,7 @@ impl Connection {
                 }
             } else if lr.password.is_empty() {
                 #[cfg(all(target_os = "linux", feature = "linux_headless"))]
+                #[cfg(not(any(feature = "flatpak", feature = "appimage")))]
                 if desktop_err.is_empty() {
                     self.try_start_cm(lr.my_id, lr.my_name, false);
                 } else {
@@ -1368,6 +1385,7 @@ impl Connection {
                         .unwrap()
                         .insert(self.ip.clone(), failure);
                     #[cfg(all(target_os = "linux", feature = "linux_headless"))]
+                    #[cfg(not(any(feature = "flatpak", feature = "appimage")))]
                     if desktop_err.is_empty() {
                         self.send_login_error(LOGIN_MSG_PASSWORD_WRONG).await;
                         self.try_start_cm(lr.my_id, lr.my_name, false);
@@ -1385,6 +1403,7 @@ impl Connection {
                         LOGIN_FAILURES.lock().unwrap().remove(&self.ip);
                     }
                     #[cfg(all(target_os = "linux", feature = "linux_headless"))]
+                    #[cfg(not(any(feature = "flatpak", feature = "appimage")))]
                     if desktop_err.is_empty() {
                         #[cfg(target_os = "linux")]
                         if is_headless {
@@ -2196,9 +2215,14 @@ async fn start_ipc(
         #[cfg(not(feature = "linux_headless"))]
         let user = None;
         #[cfg(all(target_os = "linux", feature = "linux_headless"))]
+        #[cfg(any(feature = "flatpak", feature = "appimage"))]
+        let user = None;
+        #[cfg(all(target_os = "linux", feature = "linux_headless"))]
+        #[cfg(not(any(feature = "flatpak", feature = "appimage")))]
         let mut user = None;
         // Cm run as user, wait until desktop session is ready.
         #[cfg(all(target_os = "linux", feature = "linux_headless"))]
+        #[cfg(not(any(feature = "flatpak", feature = "appimage")))]
         if linux_desktop_manager::is_headless() {
             let mut username = linux_desktop_manager::get_username();
             loop {
