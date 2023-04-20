@@ -19,7 +19,6 @@ path = "src/naming.rs"
 inline = []
 hbbs = []
 cli = []
-with_rc = ["simple_rc"]
 flutter_texture_render = []
 appimage = []
 flatpak = []
@@ -31,6 +30,8 @@ default = ["use_dasp"]
 hwcodec = ["scrap/hwcodec"]
 mediacodec = ["scrap/mediacodec"]
 linux_headless = ["pam", "users"]
+virtual_display_driver = ["virtual_display"]
+plugin_framework = []
 
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
 
@@ -64,7 +65,6 @@ flutter_rust_bridge = { version = "1.61.1", optional = true }
 errno = "0.3"
 rdev = { git = "https://github.com/fufesou/rdev" }
 url = { version = "2.1", features = ["serde"] }
-dlopen = "0.1"
 crossbeam-queue = "0.3"
 hex = "0.4"
 reqwest = { version = "0.11", features = ["blocking", "json", "rustls-tls"], default-features=false }
@@ -94,7 +94,7 @@ winit = "0.26"
 winapi = { version = "0.3", features = ["winuser", "wincrypt"] }
 winreg = "0.10"
 windows-service = "0.4"
-virtual_display = { path = "libs/virtual_display" }
+virtual_display = { path = "libs/virtual_display", optional = true }
 impersonate_system = { git = "https://github.com/21pages/impersonate-system" }
 shared_memory = "0.12"
 shutdown_hooks = "0.1"
@@ -135,7 +135,7 @@ jni = "0.19"
 flutter_rust_bridge = "1.61.1"
 
 [workspace]
-members = ["libs/scrap", "libs/hbb_common", "libs/enigo", "libs/clipboard", "libs/virtual_display", "libs/virtual_display/dylib", "libs/simple_rc", "libs/portable"]
+members = ["libs/scrap", "libs/hbb_common", "libs/enigo", "libs/clipboard", "libs/virtual_display", "libs/virtual_display/dylib", "libs/portable"]
 exclude = ["vdi/host", "examples/custom_plugin"]
 
 [package.metadata.winres]
@@ -150,7 +150,6 @@ winapi = { version = "0.3", features = [ "winnt" ] }
 [build-dependencies]
 cc = "1.0"
 hbb_common = { path = "libs/hbb_common" }
-simple_rc = { path = "libs/simple_rc", optional = true }
 flutter_rust_bridge_codegen = "1.61.1"
 os-version = "0.2"
 

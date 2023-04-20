@@ -797,6 +797,7 @@ void showToast(String text, {Duration timeout = const Duration(seconds: 2)}) {
               padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 5),
               child: Text(
                 text,
+                textAlign: TextAlign.center,
                 style: const TextStyle(
                     decoration: TextDecoration.none,
                     fontWeight: FontWeight.w300,
@@ -1599,8 +1600,10 @@ bool callUniLinksUriHandler(Uri uri) {
     final peerId = uri.path.substring("/new/".length);
     var param = uri.queryParameters;
     String? switch_uuid = param["switch_uuid"];
+    String? password = param["password"];
     Future.delayed(Duration.zero, () {
-      rustDeskWinManager.newRemoteDesktop(peerId, switch_uuid: switch_uuid);
+      rustDeskWinManager.newRemoteDesktop(peerId,
+          password: password, switch_uuid: switch_uuid);
     });
     return true;
   }
@@ -2031,4 +2034,13 @@ Widget futureBuilder(
           return Container();
         }
       });
+}
+
+void onCopyFingerprint(String value) {
+  if (value.isNotEmpty) {
+    Clipboard.setData(ClipboardData(text: value));
+    showToast('$value\n${translate("Copied")}');
+  } else {
+    showToast(translate("no fingerprints"));
+  }
 }

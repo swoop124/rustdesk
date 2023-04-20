@@ -53,10 +53,7 @@ use scrap::{
     ImageFormat,
 };
 
-use crate::{
-    common::{self, is_keyboard_mode_supported},
-    server::video_service::{SCRAP_X11_REF_URL, SCRAP_X11_REQUIRED},
-};
+use crate::common::{self, is_keyboard_mode_supported};
 
 #[cfg(not(any(target_os = "android", target_os = "ios")))]
 use crate::common::{check_clipboard, ClipboardContext, CLIPBOARD_INTERVAL};
@@ -73,6 +70,31 @@ pub mod io_loop;
 pub const MILLI1: Duration = Duration::from_millis(1);
 pub const SEC30: Duration = Duration::from_secs(30);
 pub const VIDEO_QUEUE_SIZE: usize = 120;
+
+#[cfg(all(target_os = "linux", feature = "linux_headless"))]
+#[cfg(not(any(feature = "flatpak", feature = "appimage")))]
+pub const LOGIN_MSG_DESKTOP_NOT_INITED: &str = "Desktop env is not inited";
+pub const LOGIN_MSG_DESKTOP_SESSION_NOT_READY: &str = "Desktop session not ready";
+pub const LOGIN_MSG_DESKTOP_XSESSION_FAILED: &str = "Desktop xsession failed";
+pub const LOGIN_MSG_DESKTOP_SESSION_ANOTHER_USER: &str = "Desktop session another user login";
+pub const LOGIN_MSG_DESKTOP_XORG_NOT_FOUND: &str = "Desktop xorg not found";
+// ls /usr/share/xsessions/
+pub const LOGIN_MSG_DESKTOP_NO_DESKTOP: &str = "Desktop none";
+pub const LOGIN_MSG_DESKTOP_SESSION_NOT_READY_PASSWORD_EMPTY: &str =
+    "Desktop session not ready, password empty";
+pub const LOGIN_MSG_DESKTOP_SESSION_NOT_READY_PASSWORD_WRONG: &str =
+    "Desktop session not ready, password wrong";
+pub const LOGIN_MSG_PASSWORD_EMPTY: &str = "Empty Password";
+pub const LOGIN_MSG_PASSWORD_WRONG: &str = "Wrong Password";
+pub const LOGIN_MSG_NO_PASSWORD_ACCESS: &str = "No Password Access";
+pub const LOGIN_MSG_OFFLINE: &str = "Offline";
+#[cfg(target_os = "linux")]
+pub const SCRAP_UBUNTU_HIGHER_REQUIRED: &str = "Wayland requires Ubuntu 21.04 or higher version.";
+#[cfg(target_os = "linux")]
+pub const SCRAP_OTHER_VERSION_OR_X11_REQUIRED: &str =
+    "Wayland requires higher version of linux distro. Please try X11 desktop or change your OS.";
+pub const SCRAP_X11_REQUIRED: &str = "x11 expected";
+pub const SCRAP_X11_REF_URL: &str = "https://rustdesk.com/docs/en/manual/linux/#x11-required";
 
 /// Client of the remote desktop.
 pub struct Client;
@@ -143,6 +165,7 @@ impl OboePlayer {
         }
     }
 
+    #[cfg(not(any(target_os = "android", target_os = "ios")))]
     fn is_null(&self) -> bool {
         self.raw.is_null()
     }
@@ -178,7 +201,7 @@ impl Client {
         token: &str,
         conn_type: ConnType,
         interface: impl Interface,
-    ) -> ResultType<(Stream, bool)> {
+    ) -> ResultType<(Stream, bool, Option<Vec<u8>>)> {
         match Self::_start(peer, key, token, conn_type, interface).await {
             Err(err) => {
                 let err_str = err.to_string();
@@ -199,7 +222,7 @@ impl Client {
         token: &str,
         conn_type: ConnType,
         interface: impl Interface,
-    ) -> ResultType<(Stream, bool)> {
+    ) -> ResultType<(Stream, bool, Option<Vec<u8>>)> {
         // to-do: remember the port for each peer, so that we can retry easier
         if hbb_common::is_ip_str(peer) {
             return Ok((
@@ -209,6 +232,7 @@ impl Client {
                 )
                 .await?,
                 true,
+                None,
             ));
         }
         // Allow connect to {domain}:{port}
@@ -216,6 +240,7 @@ impl Client {
             return Ok((
                 socket_client::connect_tcp(peer, RENDEZVOUS_TIMEOUT).await?,
                 true,
+                None,
             ));
         }
         let (mut rendezvous_server, servers, contained) = crate::get_rendezvous_server(1_000).await;
@@ -311,7 +336,7 @@ impl Client {
                                 my_addr.is_ipv4(),
                             )
                             .await?;
-                            Self::secure_connection(
+                            let pk = Self::secure_connection(
                                 peer,
                                 signed_id_pk,
                                 key,
@@ -320,7 +345,7 @@ impl Client {
                                 interface,
                             )
                             .await?;
-                            return Ok((conn, false));
+                            return Ok((conn, false, pk));
                         }
                         _ => {
                             log::error!("Unexpected protobuf msg received: {:?}", msg_in);
@@ -381,7 +406,7 @@ impl Client {
         token: &str,
         conn_type: ConnType,
         interface: impl Interface,
-    ) -> ResultType<(Stream, bool)> {
+    ) -> ResultType<(Stream, bool, Option<Vec<u8>>)> {
         let direct_failures = PeerConfig::load(peer_id).direct_failures;
         let mut connect_timeout = 0;
         const MIN: u64 = 1000;
@@ -451,8 +476,9 @@ impl Client {
         }
         let mut conn = conn?;
         log::info!("{:?} used to establish connection", start.elapsed());
-        Self::secure_connection(peer_id, signed_id_pk, key, &mut conn, direct, interface).await?;
-        Ok((conn, direct))
+        let pk = Self::secure_connection(peer_id, signed_id_pk, key, &mut conn, direct, interface)
+            .await?;
+        Ok((conn, direct, pk))
     }
 
     /// Establish secure connection with the server.
@@ -463,17 +489,19 @@ impl Client {
         conn: &mut Stream,
         direct: bool,
         interface: impl Interface,
-    ) -> ResultType<()> {
+    ) -> ResultType<Option<Vec<u8>>> {
         let rs_pk = get_rs_pk(if key.is_empty() {
             hbb_common::config::RS_PUB_KEY
         } else {
             key
         });
         let mut sign_pk = None;
+        let mut option_pk = None;
         if !signed_id_pk.is_empty() && rs_pk.is_some() {
             if let Ok((id, pk)) = decode_id_pk(&signed_id_pk, &rs_pk.unwrap()) {
                 if id == peer_id {
                     sign_pk = Some(sign::PublicKey(pk));
+                    option_pk = Some(pk.to_vec());
                 }
             }
             if sign_pk.is_none() {
@@ -485,7 +513,7 @@ impl Client {
             None => {
                 // send an empty message out in case server is setting up secure and waiting for first message
                 conn.send(&Message::new()).await?;
-                return Ok(());
+                return Ok(option_pk);
             }
         };
         match timeout(READ_TIMEOUT, conn.next()).await? {
@@ -538,7 +566,7 @@ impl Client {
                 bail!("Reset by the peer");
             }
         }
-        Ok(())
+        Ok(option_pk)
     }
 
     /// Request a relay connection to the server.
@@ -1970,49 +1998,49 @@ struct LoginErrorMsgBox {
 lazy_static::lazy_static! {
     static ref LOGIN_ERROR_MAP: Arc<HashMap<&'static str, LoginErrorMsgBox>> = {
         use hbb_common::config::LINK_HEADLESS_LINUX_SUPPORT;
-        let map = HashMap::from([(crate::server::LOGIN_MSG_DESKTOP_SESSION_NOT_READY, LoginErrorMsgBox{
+        let map = HashMap::from([(LOGIN_MSG_DESKTOP_SESSION_NOT_READY, LoginErrorMsgBox{
             msgtype: "session-login",
             title: "",
             text: "",
             link: "",
             try_again: true,
-        }), (crate::server::LOGIN_MSG_DESKTOP_XSESSION_FAILED, LoginErrorMsgBox{
+        }), (LOGIN_MSG_DESKTOP_XSESSION_FAILED, LoginErrorMsgBox{
             msgtype: "session-re-login",
             title: "",
             text: "",
             link: "",
             try_again: true,
-        }), (crate::server::LOGIN_MSG_DESKTOP_SESSION_ANOTHER_USER, LoginErrorMsgBox{
+        }), (LOGIN_MSG_DESKTOP_SESSION_ANOTHER_USER, LoginErrorMsgBox{
             msgtype: "info-nocancel",
             title: "another_user_login_title_tip",
             text: "another_user_login_text_tip",
             link: "",
             try_again: false,
-        }), (crate::server::LOGIN_MSG_DESKTOP_XORG_NOT_FOUND, LoginErrorMsgBox{
+        }), (LOGIN_MSG_DESKTOP_XORG_NOT_FOUND, LoginErrorMsgBox{
             msgtype: "info-nocancel",
             title: "xorg_not_found_title_tip",
             text: "xorg_not_found_text_tip",
             link: LINK_HEADLESS_LINUX_SUPPORT,
             try_again: true,
-        }), (crate::server::LOGIN_MSG_DESKTOP_NO_DESKTOP, LoginErrorMsgBox{
+        }), (LOGIN_MSG_DESKTOP_NO_DESKTOP, LoginErrorMsgBox{
             msgtype: "info-nocancel",
             title: "no_desktop_title_tip",
             text: "no_desktop_text_tip",
             link: LINK_HEADLESS_LINUX_SUPPORT,
             try_again: true,
-        }), (crate::server::LOGIN_MSG_DESKTOP_SESSION_NOT_READY_PASSWORD_EMPTY, LoginErrorMsgBox{
+        }), (LOGIN_MSG_DESKTOP_SESSION_NOT_READY_PASSWORD_EMPTY, LoginErrorMsgBox{
             msgtype: "session-login-password",
             title: "",
             text: "",
             link: "",
             try_again: true,
-        }), (crate::server::LOGIN_MSG_DESKTOP_SESSION_NOT_READY_PASSWORD_WRONG, LoginErrorMsgBox{
+        }), (LOGIN_MSG_DESKTOP_SESSION_NOT_READY_PASSWORD_WRONG, LoginErrorMsgBox{
             msgtype: "session-login-re-password",
             title: "",
             text: "",
             link: "",
             try_again: true,
-        }), (crate::server::LOGIN_MSG_NO_PASSWORD_ACCESS, LoginErrorMsgBox{
+        }), (LOGIN_MSG_NO_PASSWORD_ACCESS, LoginErrorMsgBox{
             msgtype: "wait-remote-accept-nook",
             title: "Prompt",
             text: "Please wait for the remote side to accept your session request...",
@@ -2030,11 +2058,11 @@ pub fn handle_login_error(
     err: &str,
     interface: &impl Interface,
 ) -> bool {
-    if err == crate::server::LOGIN_MSG_PASSWORD_EMPTY {
+    if err == LOGIN_MSG_PASSWORD_EMPTY {
         lc.write().unwrap().password = Default::default();
         interface.msgbox("input-password", "Password Required", "", "");
         true
-    } else if err == crate::server::LOGIN_MSG_PASSWORD_WRONG {
+    } else if err == LOGIN_MSG_PASSWORD_WRONG {
         lc.write().unwrap().password = Default::default();
         interface.msgbox("re-input-password", err, "Do you want to enter again?", "");
         true
