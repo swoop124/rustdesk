@@ -10,11 +10,14 @@ import 'package:flutter_hbb/desktop/pages/desktop_home_page.dart';
 import 'package:flutter_hbb/desktop/pages/desktop_tab_page.dart';
 import 'package:flutter_hbb/models/platform_model.dart';
 import 'package:flutter_hbb/models/server_model.dart';
+import 'package:flutter_hbb/plugin/manager.dart';
+import 'package:flutter_hbb/plugin/widgets/desktop_settings.dart';
 import 'package:get/get.dart';
 import 'package:provider/provider.dart';
 import 'package:url_launcher/url_launcher.dart';
 import 'package:url_launcher/url_launcher_string.dart';
 import 'package:flutter_hbb/desktop/widgets/scroll_wrapper.dart';
+import 'package:window_manager/window_manager.dart';
 
 import '../../common/widgets/dialog.dart';
 import '../../common/widgets/login.dart';
@@ -71,16 +74,6 @@ class DesktopSettingPage extends StatefulWidget {
 
 class _DesktopSettingPageState extends State<DesktopSettingPage>
     with TickerProviderStateMixin, AutomaticKeepAliveClientMixin {
-  final List<_TabInfo> settingTabs = <_TabInfo>[
-    _TabInfo('General', Icons.settings_outlined, Icons.settings),
-    _TabInfo('Security', Icons.enhanced_encryption_outlined,
-        Icons.enhanced_encryption),
-    _TabInfo('Network', Icons.link_outlined, Icons.link),
-    _TabInfo('Display', Icons.desktop_windows_outlined, Icons.desktop_windows),
-    _TabInfo('Account', Icons.person_outline, Icons.person),
-    _TabInfo('About', Icons.info_outline, Icons.info)
-  ];
-
   late PageController controller;
   late RxInt selectedIndex;
 
@@ -104,6 +97,39 @@ class _DesktopSettingPageState extends State<DesktopSettingPage>
     Get.delete<RxInt>(tag: _kSettingPageIndexTag);
   }
 
+  List<_TabInfo> _settingTabs() {
+    final List<_TabInfo> settingTabs = <_TabInfo>[
+      _TabInfo('General', Icons.settings_outlined, Icons.settings),
+      _TabInfo('Security', Icons.enhanced_encryption_outlined,
+          Icons.enhanced_encryption),
+      _TabInfo('Network', Icons.link_outlined, Icons.link),
+      _TabInfo(
+          'Display', Icons.desktop_windows_outlined, Icons.desktop_windows),
+      _TabInfo('Account', Icons.person_outline, Icons.person),
+      _TabInfo('About', Icons.info_outline, Icons.info)
+    ];
+    if (bind.pluginFeatureIsEnabled()) {
+      settingTabs.insert(
+          4, _TabInfo('Plugin', Icons.extension_outlined, Icons.extension));
+    }
+    return settingTabs;
+  }
+
+  List<Widget> _children() {
+    final children = [
+      _General(),
+      _Safety(),
+      _Network(),
+      _Display(),
+      _Account(),
+      _About(),
+    ];
+    if (bind.pluginFeatureIsEnabled()) {
+      children.insert(4, _Plugin());
+    }
+    return children;
+  }
+
   @override
   Widget build(BuildContext context) {
     super.build(context);
@@ -116,7 +142,7 @@ class _DesktopSettingPageState extends State<DesktopSettingPage>
             child: Column(
               children: [
                 _header(),
-                Flexible(child: _listView(tabs: settingTabs)),
+                Flexible(child: _listView(tabs: _settingTabs())),
               ],
             ),
           ),
@@ -129,14 +155,7 @@ class _DesktopSettingPageState extends State<DesktopSettingPage>
                   child: PageView(
                     controller: controller,
                     physics: DraggableNeverScrollableScrollPhysics(),
-                    children: const [
-                      _General(),
-                      _Safety(),
-                      _Network(),
-                      _Display(),
-                      _Account(),
-                      _About(),
-                    ],
+                    children: _children(),
                   )),
             ),
           )
@@ -1376,6 +1395,104 @@ class _AccountState extends State<_Account> {
   }
 }
 
+class _Checkbox extends StatefulWidget {
+  final String label;
+  final bool Function() getValue;
+  final Future<void> Function(bool) setValue;
+
+  const _Checkbox(
+      {Key? key,
+      required this.label,
+      required this.getValue,
+      required this.setValue})
+      : super(key: key);
+
+  @override
+  State<_Checkbox> createState() => _CheckboxState();
+}
+
+class _CheckboxState extends State<_Checkbox> {
+  var value = false;
+
+  @override
+  initState() {
+    super.initState();
+    value = widget.getValue();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    onChanged(bool b) async {
+      await widget.setValue(b);
+      setState(() {
+        value = widget.getValue();
+      });
+    }
+
+    return GestureDetector(
+      child: Row(
+        children: [
+          Checkbox(
+            value: value,
+            onChanged: (_) => onChanged(!value),
+          ).marginOnly(right: 5),
+          Expanded(
+            child: Text(translate(widget.label)),
+          )
+        ],
+      ).marginOnly(left: _kCheckBoxLeftMargin),
+      onTap: () => onChanged(!value),
+    );
+  }
+}
+
+class _Plugin extends StatefulWidget {
+  const _Plugin({Key? key}) : super(key: key);
+
+  @override
+  State<_Plugin> createState() => _PluginState();
+}
+
+class _PluginState extends State<_Plugin> {
+  @override
+  Widget build(BuildContext context) {
+    bind.pluginListReload();
+    final scrollController = ScrollController();
+    return DesktopScrollWrapper(
+      scrollController: scrollController,
+      child: ChangeNotifierProvider.value(
+        value: pluginManager,
+        child: Consumer<PluginManager>(builder: (context, model, child) {
+          return ListView(
+            physics: DraggableNeverScrollableScrollPhysics(),
+            controller: scrollController,
+            children: model.plugins.map((entry) => pluginCard(entry)).toList(),
+          ).marginOnly(bottom: _kListViewBottomMargin);
+        }),
+      ),
+    );
+  }
+
+  Widget pluginCard(PluginInfo plugin) {
+    return ChangeNotifierProvider.value(
+      value: plugin,
+      child: Consumer<PluginInfo>(
+        builder: (context, model, child) => DesktopSettingsCard(plugin: model),
+      ),
+    );
+  }
+
+  Widget accountAction() {
+    return Obx(() => _Button(
+        gFFI.userModel.userName.value.isEmpty ? 'Login' : 'Logout',
+        () => {
+              gFFI.userModel.userName.value.isEmpty
+                  ? loginDialog()
+                  : gFFI.userModel.logOut()
+            }));
+  }
+}
+
 class _About extends StatefulWidget {
   const _About({Key? key}) : super(key: key);
 
@@ -1693,6 +1810,9 @@ Widget _lock(
                     if (checked) {
                       onUnlock();
                     }
+                    if (Platform.isMacOS) {
+                      await windowManager.show();
+                    }
                   },
                 ).marginSymmetric(horizontal: 2, vertical: 4),
               ).marginOnly(left: _kCardLeftMargin),
@@ -1830,7 +1950,7 @@ void changeSocks5Proxy() async {
   RxBool obscure = true.obs;
 
   var isInProgress = false;
-  gFFI.dialogManager.show((setState, close) {
+  gFFI.dialogManager.show((setState, close, context) {
     submit() async {
       setState(() {
         proxyMsg = '';

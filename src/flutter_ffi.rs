@@ -35,7 +35,7 @@ fn initialize(app_dir: &str) {
     {
         android_logger::init_once(
             android_logger::Config::default()
-                .with_min_level(log::Level::Debug) // limit log level
+                .with_max_level(log::LevelFilter::Debug) // limit log level
                 .with_tag("ffi"), // logs will show under mytag tag
         );
         #[cfg(feature = "mediacodec")]
@@ -76,6 +76,7 @@ pub fn session_add_sync(
     id: String,
     is_file_transfer: bool,
     is_port_forward: bool,
+    is_rdp: bool,
     switch_uuid: String,
     force_relay: bool,
     password: String,
@@ -84,6 +85,7 @@ pub fn session_add_sync(
         &id,
         is_file_transfer,
         is_port_forward,
+        is_rdp,
         &switch_uuid,
         force_relay,
         password,
@@ -539,7 +541,7 @@ pub fn session_change_resolution(id: String, width: i32, height: i32) {
     }
 }
 
-pub fn session_set_size(_id: String, _width: i32, _height: i32) {
+pub fn session_set_size(_id: String, _width: usize, _height: usize) {
     #[cfg(feature = "flutter_texture_render")]
     if let Some(session) = SESSIONS.write().unwrap().get_mut(&_id) {
         session.set_size(_width, _height);
@@ -749,6 +751,25 @@ pub fn main_load_recent_peers() {
             serde_json::ser::to_string(&data).unwrap_or("".to_owned()),
         );
     }
+}
+
+pub fn main_load_recent_peers_sync() -> SyncReturn<String> {
+    if !config::APP_DIR.read().unwrap().is_empty() {
+        let peers: Vec<HashMap<&str, String>> = PeerConfig::peers()
+            .drain(..)
+            .map(|(id, _, p)| peer_to_map(id, p))
+            .collect();
+
+        let data = HashMap::from([
+            ("name", "load_recent_peers".to_owned()),
+            (
+                "peers",
+                serde_json::ser::to_string(&peers).unwrap_or("".to_owned()),
+            ),
+        ]);
+        return SyncReturn(serde_json::ser::to_string(&data).unwrap_or("".to_owned()));
+    }
+    SyncReturn("".to_string())
 }
 
 pub fn main_load_fav_peers() {
@@ -1397,11 +1418,176 @@ pub fn send_url_scheme(_url: String) {
 }
 
 #[inline]
-pub fn plugin_event(_id: String, _event: Vec<u8>) {
+pub fn plugin_event(_id: String, _peer: String, _event: Vec<u8>) {
     #[cfg(feature = "plugin_framework")]
     #[cfg(not(any(target_os = "android", target_os = "ios")))]
     {
-        allow_err!(crate::plugin::handle_ui_event(&_id, &_event));
+        allow_err!(crate::plugin::handle_ui_event(&_id, &_peer, &_event));
+    }
+}
+
+pub fn plugin_register_event_stream(id: String, event2ui: StreamSink<EventToUI>) {
+    #[cfg(feature = "plugin_framework")]
+    {
+        crate::plugin::native_handlers::session::session_register_event_stream(id, event2ui);
+    }
+}
+
+#[inline]
+pub fn plugin_get_session_option(
+    _id: String,
+    _peer: String,
+    _key: String,
+) -> SyncReturn<Option<String>> {
+    #[cfg(feature = "plugin_framework")]
+    #[cfg(not(any(target_os = "android", target_os = "ios")))]
+    {
+        SyncReturn(crate::plugin::PeerConfig::get(&_id, &_peer, &_key))
+    }
+    #[cfg(any(
+        not(feature = "plugin_framework"),
+        target_os = "android",
+        target_os = "ios"
+    ))]
+    {
+        SyncReturn(None)
+    }
+}
+
+#[inline]
+pub fn plugin_set_session_option(_id: String, _peer: String, _key: String, _value: String) {
+    #[cfg(feature = "plugin_framework")]
+    #[cfg(not(any(target_os = "android", target_os = "ios")))]
+    {
+        let _res = crate::plugin::PeerConfig::set(&_id, &_peer, &_key, &_value);
+    }
+}
+
+#[inline]
+pub fn plugin_get_shared_option(_id: String, _key: String) -> SyncReturn<Option<String>> {
+    #[cfg(feature = "plugin_framework")]
+    #[cfg(not(any(target_os = "android", target_os = "ios")))]
+    {
+        SyncReturn(crate::plugin::ipc::get_config(&_id, &_key).unwrap_or(None))
+    }
+    #[cfg(any(
+        not(feature = "plugin_framework"),
+        target_os = "android",
+        target_os = "ios"
+    ))]
+    {
+        SyncReturn(None)
+    }
+}
+
+#[inline]
+pub fn plugin_set_shared_option(_id: String, _key: String, _value: String) {
+    #[cfg(feature = "plugin_framework")]
+    #[cfg(not(any(target_os = "android", target_os = "ios")))]
+    {
+        allow_err!(crate::plugin::ipc::set_config(&_id, &_key, _value));
+    }
+}
+
+#[inline]
+pub fn plugin_reload(_id: String) {
+    #[cfg(feature = "plugin_framework")]
+    #[cfg(not(any(target_os = "android", target_os = "ios")))]
+    {
+        allow_err!(crate::plugin::ipc::reload_plugin(&_id,));
+        allow_err!(crate::plugin::reload_plugin(&_id));
+    }
+}
+
+#[inline]
+pub fn plugin_enable(_id: String, _v: bool) -> SyncReturn<()> {
+    #[cfg(feature = "plugin_framework")]
+    #[cfg(not(any(target_os = "android", target_os = "ios")))]
+    {
+        allow_err!(crate::plugin::ipc::set_manager_plugin_config(
+            &_id,
+            "enabled",
+            _v.to_string()
+        ));
+        if _v {
+            allow_err!(crate::plugin::load_plugin(&_id));
+        } else {
+            crate::plugin::unload_plugin(&_id);
+        }
+    }
+    SyncReturn(())
+}
+
+pub fn plugin_is_enabled(_id: String) -> SyncReturn<bool> {
+    #[cfg(feature = "plugin_framework")]
+    #[cfg(not(any(target_os = "android", target_os = "ios")))]
+    {
+        SyncReturn(
+            match crate::plugin::ipc::get_manager_plugin_config(&_id, "enabled") {
+                Ok(Some(enabled)) => bool::from_str(&enabled).unwrap_or(false),
+                _ => false,
+            },
+        )
+    }
+    #[cfg(any(
+        not(feature = "plugin_framework"),
+        target_os = "android",
+        target_os = "ios"
+    ))]
+    {
+        SyncReturn(false)
+    }
+}
+
+pub fn plugin_feature_is_enabled() -> SyncReturn<bool> {
+    #[cfg(feature = "plugin_framework")]
+    #[cfg(not(any(target_os = "android", target_os = "ios")))]
+    {
+        #[cfg(debug_assertions)]
+        let enabled = true;
+        #[cfg(not(debug_assertions))]
+        let enabled = is_installed();
+        SyncReturn(enabled)
+    }
+    #[cfg(any(
+        not(feature = "plugin_framework"),
+        target_os = "android",
+        target_os = "ios"
+    ))]
+    {
+        SyncReturn(false)
+    }
+}
+
+pub fn plugin_sync_ui(_sync_to: String) {
+    #[cfg(feature = "plugin_framework")]
+    #[cfg(not(any(target_os = "android", target_os = "ios")))]
+    {
+        if plugin_feature_is_enabled().0 {
+            crate::plugin::sync_ui(_sync_to);
+        }
+    }
+}
+
+pub fn plugin_list_reload() {
+    #[cfg(feature = "plugin_framework")]
+    #[cfg(not(any(target_os = "android", target_os = "ios")))]
+    {
+        crate::plugin::load_plugin_list();
+    }
+}
+
+pub fn plugin_install(id: String, b: bool) {
+    #[cfg(feature = "plugin_framework")]
+    #[cfg(not(any(target_os = "android", target_os = "ios")))]
+    {
+        if b {
+            if let Err(e) = crate::plugin::install_plugin(&id) {
+                log::error!("Failed to install plugin '{}': {}", id, e);
+            }
+        } else {
+            crate::plugin::uninstall_plugin(&id, true);
+        }
     }
 }
 
@@ -1423,7 +1609,8 @@ pub mod server_side {
         app_dir: JString,
     ) {
         log::debug!("startServer from jvm");
-        if let Ok(app_dir) = env.get_string(app_dir) {
+        let mut env = env;
+        if let Ok(app_dir) = env.get_string(&app_dir) {
             *config::APP_DIR.write().unwrap() = app_dir.into();
         }
         std::thread::spawn(move || start_server(true));
@@ -1446,14 +1633,16 @@ pub mod server_side {
         locale: JString,
         input: JString,
     ) -> jstring {
-        let res = if let (Ok(input), Ok(locale)) = (env.get_string(input), env.get_string(locale)) {
+        let mut env = env;
+        let res = if let (Ok(input), Ok(locale)) = (env.get_string(&input), env.get_string(&locale))
+        {
             let input: String = input.into();
             let locale: String = locale.into();
             crate::client::translate_locale(input, &locale)
         } else {
             "".into()
         };
-        return env.new_string(res).unwrap_or(input).into_inner();
+        return env.new_string(res).unwrap_or(input).into_raw();
     }
 
     #[no_mangle]

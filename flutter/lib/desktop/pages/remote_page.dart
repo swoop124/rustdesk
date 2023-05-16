@@ -123,6 +123,7 @@ class _RemotePageState extends State<RemotePage>
       });
     }
     _ffi.ffiModel.updateEventListener(widget.id);
+    bind.pluginSyncUi(syncTo: kAppTypeDesktopRemote);
     _ffi.qualityMonitorModel.checkShowQualityMonitor(widget.id);
     // Session option should be set after models.dart/FFI.start
     _showRemoteCursor.value = bind.sessionGetToggleOptionSync(
@@ -175,6 +176,26 @@ class _RemotePageState extends State<RemotePage>
     // a minimized state.
     if (Platform.isWindows) {
       _isWindowBlur = false;
+    }
+    if (!Platform.isLinux) {
+      Wakelock.enable();
+    }
+  }
+
+  // When the window is unminimized, onWindowMaximize or onWindowRestore can be called when the old state was maximized or not.
+  @override
+  void onWindowMaximize() {
+    super.onWindowMaximize();
+    if (!Platform.isLinux) {
+      Wakelock.enable();
+    }
+  }
+
+  @override
+  void onWindowMinimize() {
+    super.onWindowMinimize();
+    if (!Platform.isLinux) {
+      Wakelock.disable();
     }
   }
 

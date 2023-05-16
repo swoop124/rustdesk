@@ -437,7 +437,7 @@ jobs:
         shell: bash
         run: |
           pushd flutter
-          flutter build ios --release 
+          flutter build ipa --release --obfuscate --split-debug-info=./split-debug-info --no-codesign
       
       # - name: Upload Artifacts
       #   # if: env.ANDROID_SIGNING_KEY != null && env.UPLOAD_ARTIFACT == 'true'
@@ -748,10 +748,11 @@ jobs:
             git config --global --add safe.directory "*"
             # rust
             pushd /opt
-            wget -O rust.tar.gz https://static.rust-lang.org/dist/rust-1.64.0-${{ matrix.job.target }}.tar.gz
+            # do not use rustup, because memory overflow in qemu
+            wget -O rust.tar.gz https://static.rust-lang.org/dist/rust-1.69.0-${{ matrix.job.target }}.tar.gz
             tar -zxvf rust.tar.gz > /dev/null && rm rust.tar.gz
-            cd rust-1.64.0-${{ matrix.job.target }} && ./install.sh
-            rm -rf rust-1.64.0-${{ matrix.job.target }}
+            cd rust-1.69.0-${{ matrix.job.target }} && ./install.sh
+            rm -rf rust-1.69.0-${{ matrix.job.target }}
             # edit config
             mkdir -p ~/.cargo/
             echo """
@@ -916,10 +917,11 @@ jobs:
             git config --global --add safe.directory "*"
             # rust
             pushd /opt
-            wget -O rust.tar.gz https://static.rust-lang.org/dist/rust-1.64.0-${{ matrix.job.target }}.tar.gz
+            # do not use rustup, because memory overflow in qemu
+            wget -O rust.tar.gz https://static.rust-lang.org/dist/rust-1.69.0-${{ matrix.job.target }}.tar.gz
             tar -zxvf rust.tar.gz > /dev/null && rm rust.tar.gz
-            cd rust-1.64.0-${{ matrix.job.target }} && ./install.sh
-            rm -rf rust-1.64.0-${{ matrix.job.target }}
+            cd rust-1.69.0-${{ matrix.job.target }} && ./install.sh
+            rm -rf rust-1.69.0-${{ matrix.job.target }}
             # edit config
             mkdir -p ~/.cargo/
             echo """
@@ -1047,10 +1049,11 @@ jobs:
             git config --global --add safe.directory "*"
             # rust
             pushd /opt
-            wget -O rust.tar.gz https://static.rust-lang.org/dist/rust-1.64.0-${{ matrix.job.target }}.tar.gz
+            # do not use rustup, because memory overflow in qemu
+            wget -O rust.tar.gz https://static.rust-lang.org/dist/rust-1.69.0-${{ matrix.job.target }}.tar.gz
             tar -zxvf rust.tar.gz > /dev/null && rm rust.tar.gz
-            cd rust-1.64.0-${{ matrix.job.target }} && ./install.sh
-            rm -rf rust-1.64.0-${{ matrix.job.target }}
+            cd rust-1.69.0-${{ matrix.job.target }} && ./install.sh
+            rm -rf rust-1.69.0-${{ matrix.job.target }}
             # edit config
             mkdir -p ~/.cargo/
             echo """

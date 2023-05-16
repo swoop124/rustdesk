@@ -17,13 +17,16 @@ import 'package:flutter_hbb/models/server_model.dart';
 import 'package:flutter_hbb/models/user_model.dart';
 import 'package:flutter_hbb/models/state_model.dart';
 import 'package:flutter_hbb/plugin/event.dart';
-import 'package:flutter_hbb/plugin/reloader.dart';
+import 'package:flutter_hbb/plugin/manager.dart';
+import 'package:flutter_hbb/plugin/widgets/desc_ui.dart';
 import 'package:flutter_hbb/common/shared_state.dart';
+import 'package:flutter_hbb/utils/multi_window_manager.dart';
 import 'package:tuple/tuple.dart';
 import 'package:image/image.dart' as img2;
 import 'package:flutter_custom_cursor/cursor_manager.dart';
 import 'package:flutter_svg/flutter_svg.dart';
 import 'package:get/get.dart';
+import 'package:window_manager/window_manager.dart';
 
 import '../common.dart';
 import '../utils/image.dart' as img;
@@ -208,37 +211,62 @@ class FfiModel with ChangeNotifier {
         closeConnection(id: peer_id);
       } else if (name == 'portable_service_running') {
         parent.target?.elevationModel.onPortableServiceRunning(evt);
-      } else if (name == "on_url_scheme_received") {
-        final url = evt['url'].toString();
-        parseRustdeskUri(url);
-      } else if (name == "on_voice_call_waiting") {
+      } else if (name == 'on_url_scheme_received') {
+        onUrlSchemeReceived(evt);
+      } else if (name == 'on_voice_call_waiting') {
         // Waiting for the response from the peer.
         parent.target?.chatModel.onVoiceCallWaiting();
-      } else if (name == "on_voice_call_started") {
+      } else if (name == 'on_voice_call_started') {
         // Voice call is connected.
         parent.target?.chatModel.onVoiceCallStarted();
-      } else if (name == "on_voice_call_closed") {
+      } else if (name == 'on_voice_call_closed') {
         // Voice call is closed with reason.
         final reason = evt['reason'].toString();
         parent.target?.chatModel.onVoiceCallClosed(reason);
-      } else if (name == "on_voice_call_incoming") {
+      } else if (name == 'on_voice_call_incoming') {
         // Voice call is requested by the peer.
         parent.target?.chatModel.onVoiceCallIncoming();
-      } else if (name == "update_voice_call_state") {
+      } else if (name == 'update_voice_call_state') {
         parent.target?.serverModel.updateVoiceCallState(evt);
-      } else if (name == "fingerprint") {
+      } else if (name == 'fingerprint') {
         FingerprintState.find(peerId).value = evt['fingerprint'] ?? '';
-      } else if (name == "plugin_desc") {
-        handleReloading(evt, peerId);
-      } else if (name == "plugin_event") {
+      } else if (name == 'plugin_manager') {
+        pluginManager.handleEvent(evt);
+      } else if (name == 'plugin_event') {
         handlePluginEvent(
             evt, peerId, (Map<String, dynamic> e) => handleMsgBox(e, peerId));
-      } else if (name == "plugin_reload") {
+      } else if (name == 'plugin_reload') {
         handleReloading(evt, peerId);
+      } else if (name == 'plugin_option') {
+        handleOption(evt, peerId);
       } else {
-        debugPrint("Unknown event name: $name");
+        debugPrint('Unknown event name: $name');
       }
     };
+  }
+
+  onUrlSchemeReceived(Map<String, dynamic> evt) {
+    final url = evt['url'].toString().trim();
+    // If we invoke uri with blank path, we just bring the main window to the top.
+    if (url.isEmpty) {
+      window_on_top(null);
+    } else if (url.startsWith(kUniLinksPrefix)) {
+      parseRustdeskUri(url);
+    } else {
+      // action
+      switch (url) {
+        case kUrlActionClose:
+          debugPrint("closing all instances");
+          Future.microtask(() async {
+            await rustDeskWinManager.closeAllSubWindows();
+            windowManager.close();
+          });
+          break;
+        default:
+          debugPrint("Unknown url received: $url");
+          break;
+      }
+    }
   }
 
   /// Bind the event listener to receive events from the Rust core.
@@ -281,7 +309,7 @@ class FfiModel with ChangeNotifier {
       //
     }
     parent.target?.recordingModel.onSwitchDisplay();
-    handleResolutions(peerId, evt["resolutions"]);
+    handleResolutions(peerId, evt['resolutions']);
     notifyListeners();
   }
 
@@ -320,7 +348,7 @@ class FfiModel with ChangeNotifier {
       showWaitUacDialog(id, dialogManager, type);
     } else if (type == 'elevation-error') {
       showElevationError(id, type, title, text, dialogManager);
-    } else if (type == "relay-hint") {
+    } else if (type == 'relay-hint') {
       showRelayHintDialog(id, type, title, text, dialogManager);
     } else {
       var hasRetry = evt['hasRetry'] == 'true';
@@ -355,7 +383,7 @@ class FfiModel with ChangeNotifier {
 
   void showRelayHintDialog(String id, String type, String title, String text,
       OverlayDialogManager dialogManager) {
-    dialogManager.show(tag: '$id-$type', (setState, close) {
+    dialogManager.show(tag: '$id-$type', (setState, close, context) {
       onClose() {
         closeConnection();
         close();
@@ -1569,6 +1597,7 @@ class FFI {
   void start(String id,
       {bool isFileTransfer = false,
       bool isPortForward = false,
+      bool isRdp = false,
       String? switchUuid,
       String? password,
       bool? forceRelay}) {
@@ -1591,6 +1620,7 @@ class FFI {
       id: id,
       isFileTransfer: isFileTransfer,
       isPortForward: isPortForward,
+      isRdp: isRdp,
       switchUuid: switchUuid ?? "",
       forceRelay: forceRelay ?? false,
       password: password ?? "",
@@ -1605,11 +1635,15 @@ class FFI {
           if (message.field0 == "close") {
             break;
           }
+
+          Map<String, dynamic>? event;
           try {
-            Map<String, dynamic> event = json.decode(message.field0);
-            await cb(event);
+            event = json.decode(message.field0);
           } catch (e) {
             debugPrint('json.decode fail1(): $e, ${message.field0}');
+          }
+          if (event != null) {
+            await cb(event);
           }
         } else if (message is EventToUI_Rgba) {
           if (useTextureRender) {

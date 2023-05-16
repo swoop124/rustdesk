@@ -2,6 +2,7 @@ import 'dart:async';
 
 import 'package:flutter/material.dart';
 import 'package:flutter_breadcrumb/flutter_breadcrumb.dart';
+import 'package:flutter_hbb/consts.dart';
 import 'package:flutter_hbb/models/file_model.dart';
 import 'package:get/get.dart';
 import 'package:toggle_switch/toggle_switch.dart';
@@ -196,7 +197,7 @@ class _FileManagerPageState extends State<FileManagerPage> {
                   } else if (v == "folder") {
                     final name = TextEditingController();
                     gFFI.dialogManager
-                        .show((setState, close) => CustomAlertDialog(
+                        .show((setState, close, context) => CustomAlertDialog(
                                 title: Text(translate("Create Folder")),
                                 content: Column(
                                   mainAxisSize: MainAxisSize.min,

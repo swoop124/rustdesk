@@ -498,5 +498,13 @@ pub static ref T: std::collections::HashMap<&'static str, &'static str> =
         ("Fingerprint", "اثر انگشت"),
         ("Copy Fingerprint", "کپی کردن اثر انگشت"),
         ("no fingerprints", "بدون اثر انگشت"),
+        ("Select a peer", "یک همتا را انتخاب کنید"),
+        ("Select peers", "همتایان را انتخاب کنید"),
+        ("Plugins", "پلاگین ها"),
+        ("Uninstall", "حذف نصب"),
+        ("Update", "Update"),
+        ("Enable", "فعال کردن"),
+        ("Disable", "غیر فعال کردن"),
+        ("Options", "گزینه ها"),
     ].iter().cloned().collect();
 }

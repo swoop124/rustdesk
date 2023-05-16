@@ -25,7 +25,7 @@ use crate::{
 
 pub const RENDEZVOUS_TIMEOUT: u64 = 12_000;
 pub const CONNECT_TIMEOUT: u64 = 18_000;
-pub const READ_TIMEOUT: u64 = 30_000;
+pub const READ_TIMEOUT: u64 = 18_000;
 pub const REG_INTERVAL: i64 = 12_000;
 pub const COMPRESS_LEVEL: i32 = 3;
 const SERIAL: i32 = 3;
@@ -322,6 +322,16 @@ fn patch(path: PathBuf) -> PathBuf {
                         .trim()
                         .to_owned();
                     if user != "root" {
+                        let cmd = format!("getent passwd '{}' | awk -F':' '{{print $6}}'", user);
+                        if let Ok(output) = std::process::Command::new(cmd).output() {
+                            let home_dir = String::from_utf8_lossy(&output.stdout)
+                                .to_string()
+                                .trim()
+                                .to_owned();
+                            if !home_dir.is_empty() {
+                                return home_dir.into();
+                            }
+                        }
                         return format!("/home/{user}").into();
                     }
                 }
@@ -959,13 +969,20 @@ impl PeerConfig {
 
     fn path(id: &str) -> PathBuf {
         //If the id contains invalid chars, encode it
-        let forbidden_paths = Regex::new(r".*[<>:/\\|\?\*].*").unwrap();
-        let id_encoded = if forbidden_paths.is_match(id) {
-            "base64_".to_string() + base64::encode(id, base64::Variant::Original).as_str()
+        let forbidden_paths = Regex::new(r".*[<>:/\\|\?\*].*");
+        let path: PathBuf;
+        if let Ok(forbidden_paths) = forbidden_paths {
+            let id_encoded = if forbidden_paths.is_match(id) {
+                "base64_".to_string() + base64::encode(id, base64::Variant::Original).as_str()
+            } else {
+                id.to_string()
+            };
+            path = [PEERS, id_encoded.as_str()].iter().collect();
         } else {
-            id.to_string()
-        };
-        let path: PathBuf = [PEERS, id_encoded.as_str()].iter().collect();
+            log::warn!("Regex create failed: {:?}", forbidden_paths.err());
+            // fallback for failing to create this regex.
+            path = [PEERS, id.replace(":", "_").as_str()].iter().collect();
+        }
         Config::with_extension(Config::path(path))
     }
 

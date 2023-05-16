@@ -13,6 +13,7 @@ import 'package:flutter_hbb/desktop/screen/desktop_port_forward_screen.dart';
 import 'package:flutter_hbb/desktop/screen/desktop_remote_screen.dart';
 import 'package:flutter_hbb/desktop/widgets/refresh_wrapper.dart';
 import 'package:flutter_hbb/models/state_model.dart';
+import 'package:flutter_hbb/plugin/handlers.dart';
 import 'package:flutter_hbb/utils/multi_window_manager.dart';
 import 'package:flutter_localizations/flutter_localizations.dart';
 import 'package:get/get.dart';
@@ -124,6 +125,8 @@ void runMainApp(bool startService) async {
   if (startService) {
     // await windowManager.ensureInitialized();
     gFFI.serverModel.startService();
+    bind.pluginSyncUi(syncTo: kAppTypeMain);
+    bind.pluginListReload();
   }
   gFFI.userModel.refreshCurrentUser();
   runApp(App());
@@ -425,6 +428,12 @@ _registerEventHandler() {
     });
     platformFFI.registerEventHandler('language', 'language', (_) async {
       reloadAllWindows();
+    });
+  }
+  // Register native handlers.
+  if (isDesktop) {
+    platformFFI.registerEventHandler('native_ui', 'native_ui', (evt) async {
+      NativeUiHandler.instance.onEvent(evt);
     });
   }
 }

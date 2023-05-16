@@ -18,9 +18,8 @@ use hbb_common::{
 };
 
 use hbb_common::{
-    config::{RENDEZVOUS_PORT, RENDEZVOUS_TIMEOUT},
+    config::{CONNECT_TIMEOUT, RENDEZVOUS_PORT},
     futures::future::join_all,
-    protobuf::Message as _,
     rendezvous_proto::*,
 };
 
@@ -77,12 +76,11 @@ pub fn install_me(_options: String, _path: String, _silent: bool, _debug: bool) 
 pub fn update_me(_path: String) {
     #[cfg(target_os = "linux")]
     {
-        std::process::Command::new("pkexec")
-            .args(&["apt", "install", "-f", &_path])
-            .spawn()
-            .ok();
-        std::fs::remove_file(&_path).ok();
-        crate::run_me(Vec::<&str>::new()).ok();
+        allow_err!(crate::platform::linux::exec_privileged(&[
+            "apt", "install", "-f", &_path
+        ]));
+        allow_err!(std::fs::remove_file(&_path));
+        allow_err!(crate::run_me(Vec::<&str>::new()));
     }
     #[cfg(windows)]
     {
@@ -1004,7 +1002,7 @@ async fn check_id(
 ) -> &'static str {
     if let Ok(mut socket) = hbb_common::socket_client::connect_tcp(
         crate::check_port(rendezvous_server, RENDEZVOUS_PORT),
-        RENDEZVOUS_TIMEOUT,
+        CONNECT_TIMEOUT,
     )
     .await
     {
@@ -1017,34 +1015,34 @@ async fn check_id(
         });
         let mut ok = false;
         if socket.send(&msg_out).await.is_ok() {
-            if let Some(Ok(bytes)) = socket.next_timeout(3_000).await {
-                if let Ok(msg_in) = RendezvousMessage::parse_from_bytes(&bytes) {
-                    match msg_in.union {
-                        Some(rendezvous_message::Union::RegisterPkResponse(rpr)) => {
-                            match rpr.result.enum_value_or_default() {
-                                register_pk_response::Result::OK => {
-                                    ok = true;
-                                }
-                                register_pk_response::Result::ID_EXISTS => {
-                                    return "Not available";
-                                }
-                                register_pk_response::Result::TOO_FREQUENT => {
-                                    return "Too frequent";
-                                }
-                                register_pk_response::Result::NOT_SUPPORT => {
-                                    return "server_not_support";
-                                }
-                                register_pk_response::Result::SERVER_ERROR => {
-                                    return "Server error";
-                                }
-                                register_pk_response::Result::INVALID_ID_FORMAT => {
-                                    return INVALID_FORMAT;
-                                }
-                                _ => {}
+            if let Some(msg_in) =
+                crate::common::get_next_nonkeyexchange_msg(&mut socket, None).await
+            {
+                match msg_in.union {
+                    Some(rendezvous_message::Union::RegisterPkResponse(rpr)) => {
+                        match rpr.result.enum_value_or_default() {
+                            register_pk_response::Result::OK => {
+                                ok = true;
                             }
+                            register_pk_response::Result::ID_EXISTS => {
+                                return "Not available";
+                            }
+                            register_pk_response::Result::TOO_FREQUENT => {
+                                return "Too frequent";
+                            }
+                            register_pk_response::Result::NOT_SUPPORT => {
+                                return "server_not_support";
+                            }
+                            register_pk_response::Result::SERVER_ERROR => {
+                                return "Server error";
+                            }
+                            register_pk_response::Result::INVALID_ID_FORMAT => {
+                                return INVALID_FORMAT;
+                            }
+                            _ => {}
                         }
-                        _ => {}
                     }
+                    _ => {}
                 }
             }
         }

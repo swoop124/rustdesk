@@ -49,7 +49,10 @@ class _PortForwardPageState extends State<PortForwardPage>
   void initState() {
     super.initState();
     _ffi = FFI();
-    _ffi.start(widget.id, isPortForward: true, forceRelay: widget.forceRelay);
+    _ffi.start(widget.id,
+        isPortForward: true,
+        forceRelay: widget.forceRelay,
+        isRdp: widget.isRDP);
     Get.put(_ffi, tag: 'pf_${widget.id}');
     if (!Platform.isLinux) {
       Wakelock.enable();
@@ -309,7 +312,8 @@ class _PortForwardPageState extends State<PortForwardPage>
                       child: SizedBox(
                         width: 120,
                         child: ElevatedButton(
-                          onPressed: () => bind.sessionNewRdp(id: widget.id),
+                          onPressed: () =>
+                              bind.sessionNewRdp(id: "pf_${widget.id}"),
                           child: Text(
                             translate('New RDP'),
                           ),

@@ -8,6 +8,9 @@ use parity_tokio_ipc::{
 };
 use serde_derive::{Deserialize, Serialize};
 
+#[cfg(all(feature = "flutter", feature = "plugin_framework"))]
+#[cfg(not(any(target_os = "android", target_os = "ios")))]
+use crate::plugin::ipc::Plugin;
 #[cfg(not(any(target_os = "android", target_os = "ios")))]
 pub use clipboard::ClipboardFile;
 use hbb_common::{
@@ -33,6 +36,8 @@ pub enum PrivacyModeState {
     OffByPeer,
     OffUnknown,
 }
+// IPC actions here.
+pub const IPC_ACTION_CLOSE: &str = "close";
 
 #[derive(Debug, Serialize, Deserialize, Clone)]
 #[serde(tag = "t", content = "c")]
@@ -142,7 +147,7 @@ pub enum DataPortableService {
     Ping,
     Pong,
     ConnCount(Option<usize>),
-    Mouse(Vec<u8>),
+    Mouse((Vec<u8>, i32)),
     Key(Vec<u8>),
     RequestStart,
     WillClose,
@@ -215,6 +220,9 @@ pub enum Data {
     StartVoiceCall,
     VoiceCallResponse(bool),
     CloseVoiceCall(String),
+    #[cfg(all(feature = "flutter", feature = "plugin_framework"))]
+    #[cfg(not(any(target_os = "android", target_os = "ios")))]
+    Plugin(Plugin),
 }
 
 #[tokio::main(flavor = "current_thread")]
@@ -453,6 +461,9 @@ async fn handle(data: Data, stream: &mut Connection) {
                     .await
             );
         }
+        #[cfg(all(feature = "flutter", feature = "plugin_framework"))]
+        #[cfg(not(any(target_os = "android", target_os = "ios")))]
+        Data::Plugin(plugin) => crate::plugin::ipc::handle_plugin(plugin, stream).await,
         _ => {}
     }
 }
@@ -860,6 +871,14 @@ pub async fn send_url_scheme(url: String) -> ResultType<()> {
         .send(&Data::UrlLink(url))
         .await?;
     Ok(())
+}
+
+// Emit `close` events to ipc.
+pub fn close_all_instances() -> ResultType<bool> {
+    match crate::ipc::send_url_scheme(IPC_ACTION_CLOSE.to_owned()) {
+        Ok(_) => Ok(true),
+        Err(err) => Err(err),
+    }
 }
 
 #[cfg(test)]

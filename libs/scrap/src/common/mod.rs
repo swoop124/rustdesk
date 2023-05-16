@@ -44,11 +44,42 @@ pub const HW_STRIDE_ALIGN: usize = 0; // recommended by av_frame_get_buffer
 pub mod record;
 mod vpx;
 
+#[repr(usize)]
 #[derive(Copy, Clone)]
 pub enum ImageFormat {
     Raw,
     ABGR,
     ARGB,
+}
+#[repr(C)]
+pub struct ImageRgb {
+    pub raw: Vec<u8>,
+    pub w: usize,
+    pub h: usize,
+    pub fmt: ImageFormat,
+    pub stride: usize,
+}
+
+impl ImageRgb {
+    pub fn new(fmt: ImageFormat, stride: usize) -> Self {
+        Self {
+            raw: Vec::new(),
+            w: 0,
+            h: 0,
+            fmt,
+            stride,
+        }
+    }
+
+    #[inline]
+    pub fn fmt(&self) -> ImageFormat {
+        self.fmt
+    }
+
+    #[inline]
+    pub fn stride(&self) -> usize {
+        self.stride
+    }
 }
 
 #[inline]
