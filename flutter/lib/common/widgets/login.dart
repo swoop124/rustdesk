@@ -4,6 +4,7 @@ import 'dart:convert';
 import 'package:flutter/material.dart';
 import 'package:flutter_hbb/common/hbbs/hbbs.dart';
 import 'package:flutter_hbb/models/platform_model.dart';
+import 'package:flutter_hbb/models/user_model.dart';
 import 'package:get/get.dart';
 import 'package:flutter_svg/flutter_svg.dart';
 import 'package:url_launcher/url_launcher.dart';
@@ -147,7 +148,7 @@ class _WidgetOPState extends State<WidgetOP> {
       final authBody = resultMap['auth_body'];
       if (_stateMsg != stateMsg || _failedMsg != failedMsg) {
         if (_url.isEmpty && url != null && url.isNotEmpty) {
-          launchUrl(Uri.parse(url));
+          launchUrl(Uri.parse(url), mode: LaunchMode.externalApplication);
           _url = url;
         }
         if (authBody != null) {
@@ -188,7 +189,7 @@ class _WidgetOPState extends State<WidgetOP> {
           onTap: () async {
             _resetState();
             widget.curOP.value = widget.config.op;
-            await bind.mainAccountAuth(op: widget.config.op);
+            await bind.mainAccountAuth(op: widget.config.op, rememberMe: true);
             _beginQueryState();
           },
         ),
@@ -300,7 +301,6 @@ class LoginWidgetUserPass extends StatelessWidget {
   final String? passMsg;
   final bool isInProgress;
   final RxString curOP;
-  final RxBool autoLogin;
   final Function() onLogin;
   final FocusNode? userFocusNode;
   const LoginWidgetUserPass({
@@ -312,7 +312,6 @@ class LoginWidgetUserPass extends StatelessWidget {
     required this.passMsg,
     required this.isInProgress,
     required this.curOP,
-    required this.autoLogin,
     required this.onLogin,
   }) : super(key: key);
 
@@ -335,19 +334,6 @@ class LoginWidgetUserPass extends StatelessWidget {
               autoFocus: false,
               errorText: passMsg,
             ),
-            Obx(() => CheckboxListTile(
-                  contentPadding: const EdgeInsets.all(0),
-                  dense: true,
-                  controlAffinity: ListTileControlAffinity.leading,
-                  title: Text(
-                    translate("Remember me"),
-                  ),
-                  value: autoLogin.value,
-                  onChanged: (v) {
-                    if (v == null) return;
-                    autoLogin.value = v;
-                  },
-                )),
             Offstage(
                 offstage: !isInProgress,
                 child: const LinearProgressIndicator()),
@@ -377,6 +363,8 @@ class LoginWidgetUserPass extends StatelessWidget {
   }
 }
 
+const kAuthReqTypeOidc = 'oidc/';
+
 /// common login dialog for desktop
 /// call this directly
 Future<bool?> loginDialog() async {
@@ -388,8 +376,9 @@ Future<bool?> loginDialog() async {
   String? usernameMsg;
   String? passwordMsg;
   var isInProgress = false;
-  final autoLogin = true.obs;
   final RxString curOP = ''.obs;
+
+  final loginOptions = await UserModel.queryLoginOptions();
 
   final res = await gFFI.dialogManager.show<bool>((setState, close, context) {
     username.addListener(() {
@@ -427,7 +416,7 @@ Future<bool?> loginDialog() async {
             password: password.text,
             id: await bind.mainGetMyId(),
             uuid: await bind.mainGetUuid(),
-            autoLogin: autoLogin.value,
+            autoLogin: true,
             type: HttpType.kAuthReqTypeAccount));
 
         switch (resp.type) {
@@ -462,6 +451,42 @@ Future<bool?> loginDialog() async {
       setState(() => isInProgress = false);
     }
 
+    final oidcOptions = loginOptions
+        .where((opt) => opt.startsWith(kAuthReqTypeOidc))
+        .map((opt) => opt.substring(kAuthReqTypeOidc.length))
+        .toList();
+
+    thirdAuthWidget() => Offstage(
+          offstage: oidcOptions.isEmpty,
+          child: Column(
+            children: [
+              const SizedBox(
+                height: 8.0,
+              ),
+              Center(
+                  child: Text(
+                translate('or'),
+                style: TextStyle(fontSize: 16),
+              )),
+              const SizedBox(
+                height: 8.0,
+              ),
+              LoginWidgetOP(
+                ops: [
+                  ConfigOP(op: 'GitHub', iconWidth: 20),
+                  ConfigOP(op: 'Google', iconWidth: 20),
+                  ConfigOP(op: 'Okta', iconWidth: 38),
+                ].where((op) => oidcOptions.contains(op.op.toLowerCase())).toList(),
+                curOP: curOP,
+                cbLogin: (String username) {
+                  gFFI.userModel.userName.value = username;
+                  close(true);
+                },
+              ),
+            ],
+          ),
+        );
+
     return CustomAlertDialog(
       title: Text(translate('Login')),
       contentBoxConstraints: BoxConstraints(minWidth: 400),
@@ -478,33 +503,10 @@ Future<bool?> loginDialog() async {
             passMsg: passwordMsg,
             isInProgress: isInProgress,
             curOP: curOP,
-            autoLogin: autoLogin,
             onLogin: onLogin,
             userFocusNode: userFocusNode,
           ),
-          const SizedBox(
-            height: 8.0,
-          ),
-          Center(
-              child: Text(
-            translate('or'),
-            style: TextStyle(fontSize: 16),
-          )),
-          const SizedBox(
-            height: 8.0,
-          ),
-          LoginWidgetOP(
-            ops: [
-              ConfigOP(op: 'GitHub', iconWidth: 20),
-              ConfigOP(op: 'Google', iconWidth: 20),
-              ConfigOP(op: 'Okta', iconWidth: 38),
-            ],
-            curOP: curOP,
-            cbLogin: (String username) {
-              gFFI.userModel.userName.value = username;
-              close(true);
-            },
-          ),
+          thirdAuthWidget(),
         ],
       ),
       actions: [dialogButton('Close', onPressed: onDialogCancel)],

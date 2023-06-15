@@ -213,7 +213,7 @@ macro_rules! make_plugin {
             fn init(&self, data: &InitData, path: &str) -> ResultType<()> {
                 let mut init_ret = (self.init)(data as _);
                 if !init_ret.is_success() {
-                    let (code, msg) = init_ret.get_code_msg();
+                    let (code, msg) = init_ret.get_code_msg(path);
                     bail!(
                         "Failed to init plugin {}, code: {}, msg: {}",
                         path,
@@ -227,7 +227,7 @@ macro_rules! make_plugin {
             fn clear(&self, id: &str) {
                 let mut clear_ret = (self.clear)();
                 if !clear_ret.is_success() {
-                    let (code, msg) = clear_ret.get_code_msg();
+                    let (code, msg) = clear_ret.get_code_msg(id);
                     log::error!(
                         "Failed to clear plugin {}, code: {}, msg: {}",
                         id,
@@ -371,7 +371,7 @@ fn load_plugin_path(path: &str) -> ResultType<()> {
     PLUGIN_INFO.write().unwrap().insert(id.clone(), plugin_info);
 
     let init_info = serde_json::to_string(&InitInfo {
-        is_server: crate::common::is_server(),
+        is_server: super::is_server_running(),
     })?;
     let init_data = InitData {
         version: str_to_cstr_ret(crate::VERSION),
@@ -389,7 +389,7 @@ fn load_plugin_path(path: &str) -> ResultType<()> {
         log::error!("Failed to init plugin '{}', {}", desc.meta().id, e);
     }
 
-    if is_server() {
+    if super::is_server_running() {
         super::config::ManagerConfig::add_plugin(&desc.meta().id)?;
     }
 
@@ -428,7 +428,7 @@ pub fn plugin_call(id: &str, method: &[u8], peer: &str, event: &[u8]) -> ResultT
     if ret.is_success() {
         Ok(())
     } else {
-        let (code, msg) = ret.get_code_msg();
+        let (code, msg) = ret.get_code_msg(id);
         bail!(
             "Failed to handle plugin event, id: {}, method: {}, code: {}, msg: {}",
             id,
@@ -496,7 +496,7 @@ fn _handle_listen_event(event: String, peer: String) {
                         evt_bytes.len(),
                     );
                     if !ret.is_success() {
-                        let (code, msg) = ret.get_code_msg();
+                        let (code, msg) = ret.get_code_msg(&id);
                         log::error!(
                             "Failed to handle plugin listen event, id: {}, event: {}, code: {}, msg: {}",
                             id,
@@ -540,7 +540,7 @@ pub fn handle_client_event(id: &str, peer: &str, event: &[u8]) -> Message {
                 free_c_ptr(out as _);
                 msg
             } else {
-                let (code, msg) = ret.get_code_msg();
+                let (code, msg) = ret.get_code_msg(id);
                 if code > ERR_RUSTDESK_HANDLE_BASE && code < ERR_PLUGIN_HANDLE_BASE {
                     log::debug!(
                         "Plugin {} failed to handle client event, code: {}, msg: {}",

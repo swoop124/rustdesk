@@ -179,8 +179,6 @@ pub struct Connection {
     #[cfg(windows)]
     portable: PortableState,
     from_switch: bool,
-    #[cfg(not(any(target_os = "android", target_os = "ios")))]
-    origin_resolution: HashMap<String, Resolution>,
     voice_call_request_timestamp: Option<NonZeroI64>,
     audio_input_device_before_voice_call: Option<String>,
     options_in_login: Option<OptionMessage>,
@@ -243,12 +241,12 @@ impl Connection {
         id: i32,
         server: super::ServerPtrWeak,
     ) {
+        let _raii_id = raii::ConnectionID::new(id);
         let hash = Hash {
             salt: Config::get_salt(),
             challenge: Config::get_auto_password(6),
             ..Default::default()
         };
-        ALIVE_CONNS.lock().unwrap().push(id);
         let (tx_from_cm_holder, mut rx_from_cm) = mpsc::unbounded_channel::<ipc::Data>();
         // holding tx_from_cm_holder to avoid cpu burning of rx_from_cm.recv when all sender closed
         let tx_from_cm = tx_from_cm_holder.clone();
@@ -306,8 +304,6 @@ impl Connection {
             #[cfg(windows)]
             portable: Default::default(),
             from_switch: false,
-            #[cfg(not(any(target_os = "android", target_os = "ios")))]
-            origin_resolution: Default::default(),
             audio_sender: None,
             voice_call_request_timestamp: None,
             audio_input_device_before_voice_call: None,
@@ -631,9 +627,6 @@ impl Connection {
         conn.post_conn_audit(json!({
             "action": "close",
         }));
-        #[cfg(not(any(target_os = "android", target_os = "ios")))]
-        conn.reset_resolution();
-        ALIVE_CONNS.lock().unwrap().retain(|&c| c != id);
         if let Some(s) = conn.server.upgrade() {
             let mut s = s.write().unwrap();
             s.remove_connection(&conn.inner);
@@ -1044,6 +1037,8 @@ impl Connection {
         })
         .into();
         #[cfg(not(any(target_os = "android", target_os = "ios")))]
+        video_service::try_reset_current_display();
+        #[cfg(not(any(target_os = "android", target_os = "ios")))]
         {
             pi.resolutions = Some(SupportedResolutions {
                 resolutions: video_service::get_current_display_name()
@@ -1379,9 +1374,13 @@ impl Connection {
                 return true;
             }
 
-            if !hbb_common::is_ipv4_str(&lr.username) && lr.username != Config::get_id() {
+            if !hbb_common::is_ip_str(&lr.username)
+                && !hbb_common::is_domain_port_str(&lr.username)
+                && lr.username != Config::get_id()
+            {
                 self.send_login_error(crate::client::LOGIN_MSG_OFFLINE)
                     .await;
+                return false;
             } else if password::approve_mode() == ApproveMode::Click
                 || password::approve_mode() == ApproveMode::Both && !password::has_valid_password()
             {
@@ -1792,6 +1791,14 @@ impl Connection {
                 Some(message::Union::Misc(misc)) => match misc.union {
                     Some(misc::Union::SwitchDisplay(s)) => {
                         video_service::switch_display(s.display).await;
+                        #[cfg(not(any(target_os = "android", target_os = "ios")))]
+                        if s.width != 0 && s.height != 0 {
+                            self.change_resolution(&Resolution {
+                                width: s.width,
+                                height: s.height,
+                                ..Default::default()
+                            });
+                        }
                     }
                     Some(misc::Union::ChatMessage(c)) => {
                         self.send_to_cm(ipc::Data::ChatMessage { text: c.text });
@@ -1893,25 +1900,7 @@ impl Connection {
                         }
                     }
                     #[cfg(not(any(target_os = "android", target_os = "ios")))]
-                    Some(misc::Union::ChangeResolution(r)) => {
-                        if self.keyboard {
-                            if let Ok(name) = video_service::get_current_display_name() {
-                                if let Ok(current) = crate::platform::current_resolution(&name) {
-                                    if let Err(e) = crate::platform::change_resolution(
-                                        &name,
-                                        r.width as _,
-                                        r.height as _,
-                                    ) {
-                                        log::error!("change resolution failed:{:?}", e);
-                                    } else {
-                                        if !self.origin_resolution.contains_key(&name) {
-                                            self.origin_resolution.insert(name, current);
-                                        }
-                                    }
-                                }
-                            }
-                        }
-                    }
+                    Some(misc::Union::ChangeResolution(r)) => self.change_resolution(&r),
                     #[cfg(all(feature = "flutter", feature = "plugin_framework"))]
                     #[cfg(not(any(target_os = "android", target_os = "ios")))]
                     Some(misc::Union::PluginRequest(p)) => {
@@ -1951,6 +1940,35 @@ impl Connection {
             }
         }
         true
+    }
+
+    #[cfg(not(any(target_os = "android", target_os = "ios")))]
+    fn change_resolution(&mut self, r: &Resolution) {
+        if self.keyboard {
+            if let Ok(name) = video_service::get_current_display_name() {
+                #[cfg(all(windows, feature = "virtual_display_driver"))]
+                if let Some(_ok) =
+                    crate::virtual_display_manager::change_resolution_if_is_virtual_display(
+                        &name,
+                        r.width as _,
+                        r.height as _,
+                    )
+                {
+                    return;
+                }
+                if let Err(e) =
+                    crate::platform::change_resolution(&name, r.width as _, r.height as _)
+                {
+                    log::error!(
+                        "Failed to change resolution '{}' to ({},{}):{:?}",
+                        &name,
+                        r.width,
+                        r.height,
+                        e
+                    );
+                }
+            }
+        }
     }
 
     pub async fn handle_voice_call(&mut self, accepted: bool) {
@@ -2263,20 +2281,6 @@ impl Connection {
     }
 
     #[cfg(not(any(target_os = "android", target_os = "ios")))]
-    fn reset_resolution(&self) {
-        self.origin_resolution
-            .iter()
-            .map(|(name, r)| {
-                if let Err(e) =
-                    crate::platform::change_resolution(&name, r.width as _, r.height as _)
-                {
-                    log::error!("change resolution failed:{:?}", e);
-                }
-            })
-            .count();
-    }
-
-    #[cfg(not(any(target_os = "android", target_os = "ios")))]
     fn release_pressed_modifiers(&mut self) {
         for modifier in self.pressed_modifiers.iter() {
             rdev::simulate(&rdev::EventType::KeyRelease(*modifier)).ok();
@@ -2522,5 +2526,32 @@ impl Drop for Connection {
     fn drop(&mut self) {
         #[cfg(not(any(target_os = "android", target_os = "ios")))]
         self.release_pressed_modifiers();
+    }
+}
+
+mod raii {
+    use super::*;
+    pub struct ConnectionID(i32);
+
+    impl ConnectionID {
+        pub fn new(id: i32) -> Self {
+            ALIVE_CONNS.lock().unwrap().push(id);
+            Self(id)
+        }
+    }
+
+    impl Drop for ConnectionID {
+        fn drop(&mut self) {
+            let mut active_conns_lock = ALIVE_CONNS.lock().unwrap();
+            active_conns_lock.retain(|&c| c != self.0);
+            #[cfg(not(any(target_os = "android", target_os = "ios")))]
+            if active_conns_lock.is_empty() {
+                video_service::reset_resolutions();
+            }
+            #[cfg(all(windows, feature = "virtual_display_driver"))]
+            if active_conns_lock.is_empty() {
+                video_service::try_plug_out_virtual_display();
+            }
+        }
     }
 }

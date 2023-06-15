@@ -13,7 +13,7 @@ use hbb_common::config::Config2;
 use hbb_common::tcp::{self, new_listener};
 use hbb_common::{
     allow_err,
-    anyhow::{anyhow, Context},
+    anyhow::Context,
     bail,
     config::{Config, CONNECT_TIMEOUT, RELAY_PORT},
     log,
@@ -61,6 +61,9 @@ pub mod video_service;
 
 pub type Childs = Arc<Mutex<Vec<std::process::Child>>>;
 type ConnMap = HashMap<i32, ConnInner>;
+
+#[cfg(any(target_os = "macos", target_os = "linux"))]
+const CONFIG_SYNC_INTERVAL_SECS: f32 = 0.3;
 
 lazy_static::lazy_static! {
     pub static ref CHILD_PROCESS: Childs = Default::default();
@@ -388,7 +391,7 @@ pub async fn start_server(is_server: bool) {
         if crate::platform::current_is_wayland() {
             allow_err!(input_service::setup_uinput(0, 1920, 0, 1080).await);
         }
-        #[cfg(target_os = "macos")]
+        #[cfg(any(target_os = "macos", target_os = "linux"))]
         tokio::spawn(async { sync_and_watch_config_dir().await });
         crate::RendezvousMediator::start_all().await;
     } else {
@@ -460,7 +463,7 @@ pub async fn start_ipc_url_server() {
     }
 }
 
-#[cfg(target_os = "macos")]
+#[cfg(any(target_os = "macos", target_os = "linux"))]
 async fn sync_and_watch_config_dir() {
     if crate::platform::is_root() {
         return;
@@ -477,7 +480,7 @@ async fn sync_and_watch_config_dir() {
     log::debug!("#tries of ipc service connection: {}", tries);
     use hbb_common::sleep;
     for i in 1..=tries {
-        sleep(i as f32 * 0.3).await;
+        sleep(i as f32 * CONFIG_SYNC_INTERVAL_SECS).await;
         match crate::ipc::connect(1000, "_service").await {
             Ok(mut conn) => {
                 if !synced {
@@ -487,15 +490,17 @@ async fn sync_and_watch_config_dir() {
                                 Data::SyncConfig(Some(configs)) => {
                                     let (config, config2) = *configs;
                                     let _chk = crate::ipc::CheckIfRestart::new();
-                                    if cfg0.0 != config {
-                                        cfg0.0 = config.clone();
-                                        Config::set(config);
-                                        log::info!("sync config from root");
-                                    }
-                                    if cfg0.1 != config2 {
-                                        cfg0.1 = config2.clone();
-                                        Config2::set(config2);
-                                        log::info!("sync config2 from root");
+                                    if !config.is_empty() {
+                                        if cfg0.0 != config {
+                                            cfg0.0 = config.clone();
+                                            Config::set(config);
+                                            log::info!("sync config from root");
+                                        }
+                                        if cfg0.1 != config2 {
+                                            cfg0.1 = config2.clone();
+                                            Config2::set(config2);
+                                            log::info!("sync config2 from root");
+                                        }
                                     }
                                     synced = true;
                                 }
@@ -506,7 +511,7 @@ async fn sync_and_watch_config_dir() {
                 }
 
                 loop {
-                    sleep(0.3).await;
+                    sleep(CONFIG_SYNC_INTERVAL_SECS).await;
                     let cfg = (Config::get(), Config2::get());
                     if cfg != cfg0 {
                         log::info!("config updated, sync to root");

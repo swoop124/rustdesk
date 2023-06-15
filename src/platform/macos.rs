@@ -17,15 +17,11 @@ use core_graphics::{
     display::{kCGNullWindowID, kCGWindowListOptionOnScreenOnly, CGWindowListCopyWindowInfo},
     window::{kCGWindowName, kCGWindowOwnerPID},
 };
-use hbb_common::{allow_err, anyhow::anyhow, bail, libc, log, message_proto::Resolution};
+use hbb_common::{allow_err, anyhow::anyhow, bail, log, message_proto::Resolution};
 use include_dir::{include_dir, Dir};
 use objc::{class, msg_send, sel, sel_impl};
 use scrap::{libc::c_void, quartz::ffi::*};
-use std::{
-    ffi::{c_char, CString},
-    mem::size_of,
-    path::PathBuf,
-};
+use std::path::PathBuf;
 
 static PRIVILEGES_SCRIPTS_DIR: Dir =
     include_dir!("$CARGO_MANIFEST_DIR/src/platform/privileges_scripts");
@@ -39,7 +35,6 @@ extern "C" {
     fn AXIsProcessTrustedWithOptions(options: CFDictionaryRef) -> BOOL;
     fn InputMonitoringAuthStatus(_: BOOL) -> BOOL;
     fn MacCheckAdminAuthorization() -> BOOL;
-    fn Elevate(process: *const c_char, args: *const *const c_char) -> BOOL;
     fn MacGetModeNum(display: u32, numModes: *mut u32) -> BOOL;
     fn MacGetModes(
         display: u32,
@@ -187,7 +182,7 @@ pub fn is_installed_daemon(prompt: bool) -> bool {
     false
 }
 
-pub fn uninstall(show_new_window: bool) -> bool {
+pub fn uninstall_service(show_new_window: bool) -> bool {
     // to-do: do together with win/linux about refactory start/stop service
     if !is_installed_daemon(false) {
         return false;
@@ -359,7 +354,7 @@ pub fn get_cursor_data(hcursor: u64) -> ResultType<CursorData> {
         // let cs: id = msg_send![class!(NSColorSpace), sRGBColorSpace];
         for y in 0..(size.height as _) {
             for x in 0..(size.width as _) {
-                let color: id = msg_send![rep, colorAtX:x y:y];
+                let color: id = msg_send![rep, colorAtX:x as cocoa::foundation::NSInteger y:y as cocoa::foundation::NSInteger];
                 // let color: id = msg_send![color, colorUsingColorSpace: cs];
                 if color == nil {
                     continue;
@@ -582,19 +577,10 @@ pub fn hide_dock() {
 }
 
 fn check_main_window() -> bool {
-    use hbb_common::sysinfo::{ProcessExt, System, SystemExt};
-    let mut sys = System::new();
-    sys.refresh_processes();
-    let app = format!("/Applications/{}.app", crate::get_app_name());
-    let my_uid = sys
-        .process((std::process::id() as usize).into())
-        .map(|x| x.user_id())
-        .unwrap_or_default();
-    for (_, p) in sys.processes().iter() {
-        if p.cmd().len() == 1 && p.user_id() == my_uid && p.cmd()[0].contains(&app) {
-            return true;
-        }
+    if crate::check_process("", true) {
+        return true;
     }
+    let app = format!("/Applications/{}.app", crate::get_app_name());
     std::process::Command::new("open")
         .args(["-n", &app])
         .status()
@@ -663,7 +649,7 @@ pub fn current_resolution(name: &str) -> ResultType<Resolution> {
     }
 }
 
-pub fn change_resolution(name: &str, width: usize, height: usize) -> ResultType<()> {
+pub fn change_resolution_directly(name: &str, width: usize, height: usize) -> ResultType<()> {
     let display = name.parse::<u32>().map_err(|e| anyhow!(e))?;
     unsafe {
         if NO == MacSetMode(display, width as _, height as _) {
@@ -677,29 +663,47 @@ pub fn check_super_user_permission() -> ResultType<bool> {
     unsafe { Ok(MacCheckAdminAuthorization() == YES) }
 }
 
-pub fn elevate(args: Vec<&str>) -> ResultType<bool> {
+pub fn elevate(args: Vec<&str>, prompt: &str) -> ResultType<bool> {
     let cmd = std::env::current_exe()?;
     match cmd.to_str() {
         Some(cmd) => {
-            let cmd = CString::new(cmd)?;
-            let mut cstring_args = Vec::new();
-            for arg in args.iter() {
-                cstring_args.push(CString::new(*arg)?);
+            let mut cmd_with_args = cmd.to_string();
+            for arg in args {
+                cmd_with_args = format!("{} {}", cmd_with_args, arg);
             }
-            unsafe {
-                let args_ptr: *mut *const c_char =
-                    libc::malloc((cstring_args.len() + 1) * size_of::<*const c_char>()) as _;
-                for i in 0..cstring_args.len() {
-                    *args_ptr.add(i) = cstring_args[i].as_ptr() as _;
+            let script = format!(
+                r#"do shell script "{}" with prompt "{}" with administrator privileges"#,
+                cmd_with_args, prompt
+            );
+            match std::process::Command::new("osascript")
+                .arg("-e")
+                .arg(script)
+                .arg(&get_active_username())
+                .status()
+            {
+                Err(e) => {
+                    bail!("Failed to run osascript: {}", e);
                 }
-                *args_ptr.add(cstring_args.len()) = std::ptr::null() as _;
-                let r = Elevate(cmd.as_ptr() as _, args_ptr as _);
-                libc::free(args_ptr as _);
-                Ok(r == YES)
+                Ok(status) => Ok(status.success() && status.code() == Some(0)),
             }
         }
         None => {
             bail!("Failed to get current exe str");
         }
+    }
+}
+
+pub struct WakeLock(Option<keepawake::AwakeHandle>);
+
+impl WakeLock {
+    pub fn new(display: bool, idle: bool, sleep: bool) -> Self {
+        WakeLock(
+            keepawake::Builder::new()
+                .display(display)
+                .idle(idle)
+                .sleep(sleep)
+                .create()
+                .ok(),
+        )
     }
 }

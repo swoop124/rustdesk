@@ -735,7 +735,6 @@ abstract class BasePeerCard extends StatelessWidget {
             }
             await bind.mainRemovePeer(id: id);
           }
-          removePreference(id);
           await reloadFunc();
           close();
         }
@@ -1136,9 +1135,6 @@ void _rdpDialog(String id) async {
         child: Column(
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
-            const SizedBox(
-              height: 8.0,
-            ),
             Row(
               children: [
                 isDesktop
@@ -1207,7 +1203,7 @@ void _rdpDialog(String id) async {
                       )),
                 ),
               ],
-            ).marginOnly(bottom: isDesktop ? 8 : 0),
+            )
           ],
         ),
       ),

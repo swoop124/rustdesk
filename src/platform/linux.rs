@@ -3,6 +3,7 @@ use desktop::Desktop;
 pub use hbb_common::platform::linux::*;
 use hbb_common::{
     allow_err, bail,
+    config::Config,
     libc::{c_char, c_int, c_long, c_void},
     log,
     message_proto::Resolution,
@@ -10,6 +11,7 @@ use hbb_common::{
 };
 use std::{
     cell::RefCell,
+    io::Write,
     path::{Path, PathBuf},
     process::{Child, Command},
     string::String,
@@ -306,9 +308,14 @@ fn force_stop_server() {
 }
 
 pub fn start_os_service() {
+    check_if_stop_service();
     stop_rustdesk_servers();
     stop_subprocess();
     start_uinput_service();
+
+    std::thread::spawn(|| {
+        allow_err!(crate::ipc::start(crate::POSTFIX_SERVICE));
+    });
 
     let running = Arc::new(AtomicBool::new(true));
     let r = running.clone();
@@ -774,6 +781,12 @@ pub fn resolutions(name: &str) -> Vec<Resolution> {
                 Virtual2 disconnected (normal left inverted right x axis y axis)
                 Virtual3 disconnected (normal left inverted right x axis y axis)
 
+                Screen 0: minimum 320 x 200, current 1920 x 1080, maximum 16384 x 16384
+                eDP-1 connected primary 1920x1080+0+0 (normal left inverted right x axis y axis) 344mm x 193mm
+                1920x1080     60.01*+  60.01    59.97    59.96    59.93
+                1680x1050     59.95    59.88
+                1600x1024     60.17
+
                 XWAYLAND0 connected primary 1920x984+0+0 (normal left inverted right x axis y axis) 0mm x 0mm
                 Virtual1 connected primary 1920x984+0+0 (normal left inverted right x axis y axis) 0mm x 0mm
                 HDMI-0 connected (normal left inverted right x axis y axis)
@@ -783,7 +796,7 @@ pub fn resolutions(name: &str) -> Vec<Resolution> {
                 if let Some(caps) = re.captures(&xrandr_output) {
                     if let Some(resolutions) = caps.name("resolutions") {
                         let resolution_pat =
-                            r"\s*(?P<width>\d+)x(?P<height>\d+)\s+(?P<rates>(\d+\.\d+[* ]*)+)\s*\n";
+                            r"\s*(?P<width>\d+)x(?P<height>\d+)\s+(?P<rates>(\d+\.\d+\D*)+)\s*\n";
                         let resolution_re = Regex::new(&format!(r"{}", resolution_pat)).unwrap();
                         for resolution_caps in resolution_re.captures_iter(resolutions.as_str()) {
                             if let Some((width, height)) =
@@ -824,7 +837,7 @@ pub fn current_resolution(name: &str) -> ResultType<Resolution> {
     bail!("Failed to find current resolution for {}", name);
 }
 
-pub fn change_resolution(name: &str, width: usize, height: usize) -> ResultType<()> {
+pub fn change_resolution_directly(name: &str, width: usize, height: usize) -> ResultType<()> {
     Command::new("xrandr")
         .args(vec![
             "--output",
@@ -1053,4 +1066,129 @@ mod desktop {
             self.set_is_subprocess();
         }
     }
+}
+
+pub struct WakeLock(Option<keepawake::AwakeHandle>);
+
+impl WakeLock {
+    pub fn new(display: bool, idle: bool, sleep: bool) -> Self {
+        WakeLock(
+            keepawake::Builder::new()
+                .display(display)
+                .idle(idle)
+                .sleep(sleep)
+                .create()
+                .ok(),
+        )
+    }
+}
+
+fn has_cmd(cmd: &str) -> bool {
+    std::process::Command::new("which")
+        .arg(cmd)
+        .status()
+        .map(|x| x.success())
+        .unwrap_or_default()
+}
+
+pub fn run_cmds_pkexec(cmds: &str) -> bool {
+    const DONE: &str = "RUN_CMDS_PKEXEC_DONE";
+    if let Ok(output) = std::process::Command::new("pkexec")
+        .arg("sh")
+        .arg("-c")
+        .arg(&format!("{cmds} echo {DONE}"))
+        .output()
+    {
+        let out = String::from_utf8_lossy(&output.stdout);
+        log::debug!("cmds: {cmds}");
+        log::debug!("output: {out}");
+        out.contains(DONE)
+    } else {
+        false
+    }
+}
+
+pub fn run_me_with(secs: u32) {
+    let exe = std::env::current_exe()
+        .unwrap_or("".into())
+        .to_string_lossy()
+        .to_string();
+    std::process::Command::new("sh")
+        .arg("-c")
+        .arg(&format!("sleep {secs}; {exe}"))
+        .spawn()
+        .ok();
+}
+
+fn switch_service(stop: bool) -> String {
+    let home = std::env::var("HOME").unwrap_or_default();
+    Config::set_option("stop-service".into(), if stop { "Y" } else { "" }.into());
+    if home != "/root" && !Config::get().is_empty() {
+        format!("cp -f {home}/.config/rustdesk/RustDesk.toml /root/.config/rustdesk/; cp -f {home}/.config/rustdesk/RustDesk2.toml /root/.config/rustdesk/;")
+    } else {
+        "".to_owned()
+    }
+}
+
+pub fn uninstall_service(show_new_window: bool) -> bool {
+    if !has_cmd("systemctl") {
+        return false;
+    }
+    log::info!("Uninstalling service...");
+    let cp = switch_service(true);
+    if !run_cmds_pkexec(&format!(
+        "systemctl disable rustdesk; systemctl stop rustdesk; {cp}"
+    )) {
+        Config::set_option("stop-service".into(), "".into());
+        return true;
+    }
+    if show_new_window {
+        run_me_with(2);
+    }
+    std::process::exit(0);
+}
+
+pub fn install_service() -> bool {
+    if !has_cmd("systemctl") {
+        return false;
+    }
+    log::info!("Installing service...");
+    let cp = switch_service(false);
+    if !run_cmds_pkexec(&format!(
+        "{cp} systemctl enable rustdesk; systemctl start rustdesk;"
+    )) {
+        Config::set_option("stop-service".into(), "Y".into());
+        return true;
+    }
+    run_me_with(2);
+    std::process::exit(0);
+}
+
+fn check_if_stop_service() {
+    if Config::get_option("stop-service".into()) == "Y" {
+        allow_err!(run_cmds(
+            "systemctl disable rustdesk; systemctl stop rustdesk"
+        ));
+    }
+}
+
+pub fn check_autostart_config() -> ResultType<()> {
+    let home = std::env::var("HOME").unwrap_or_default();
+    let path = format!("{home}/.config/autostart");
+    let file = format!("{path}/rustdesk.desktop");
+    std::fs::create_dir_all(&path).ok();
+    if !Path::new(&file).exists() {
+        // write text to the desktop file
+        let mut file = std::fs::File::create(&file)?;
+        file.write_all(
+            "
+[Desktop Entry]
+Type=Application
+Exec=rustdesk --tray
+NoDisplay=false
+        "
+            .as_bytes(),
+        )?;
+    }
+    Ok(())
 }
