@@ -15,19 +15,19 @@ class HttpType {
 }
 
 class UserPayload {
+  String id = '';
   String name = '';
   String email = '';
   String note = '';
   int? status;
-  String grp = '';
   bool isAdmin = false;
 
   UserPayload.fromJson(Map<String, dynamic> json)
-      : name = json['name'] ?? '',
+      : id = json['id'] ?? '',
+        name = json['name'] ?? '',
         email = json['email'] ?? '',
         note = json['note'] ?? '',
         status = json['status'],
-        grp = json['grp'] ?? '',
         isAdmin = json['is_admin'] == true;
 }
 
@@ -67,7 +67,7 @@ class LoginRequest {
   String? password;
   String? id;
   String? uuid;
-  bool? autoLogin;
+  bool? trustThisDevice;
   String? type;
   String? verificationCode;
   Map<String, dynamic> deviceInfo = DeviceInfo.toJson();
@@ -77,7 +77,7 @@ class LoginRequest {
       this.password,
       this.id,
       this.uuid,
-      this.autoLogin,
+      this.trustThisDevice,
       this.type,
       this.verificationCode});
 
@@ -87,7 +87,7 @@ class LoginRequest {
     data['password'] = password ?? '';
     data['id'] = id ?? '';
     data['uuid'] = uuid ?? '';
-    data['autoLogin'] = autoLogin ?? '';
+    data['trustThisDevice'] = trustThisDevice ?? '';
     data['type'] = type ?? '';
     data['verificationCode'] = verificationCode ?? '';
     data['deviceInfo'] = deviceInfo;

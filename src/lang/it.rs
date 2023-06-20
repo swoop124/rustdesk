@@ -68,7 +68,7 @@ pub static ref T: std::collections::HashMap<&'static str, &'static str> =
         ("Close", "Chiudi"),
         ("Retry", "Riprova"),
         ("OK", "OK"),
-        ("Password Required", "Password richiesta"),
+        ("Password Required", "Richiesta password"),
         ("Please enter your password", "Inserisci la password"),
         ("Remember password", "Ricorda password"),
         ("Wrong Password", "Password errata"),
@@ -509,8 +509,6 @@ pub static ref T: std::collections::HashMap<&'static str, &'static str> =
         ("resolution_fit_local_tip", "Adatta risoluzione locale"),
         ("resolution_custom_tip", "Risoluzione personalizzata"),
         ("Collapse toolbar", "Comprimi barra strumenti"),
-        ("Accept and Elevate", ""),
-        ("accept_and_elevate_btn_tooltip", ""),
         ("Accept and Elevate", "Accetta ed eleva"),
         ("accept_and_elevate_btn_tooltip", "Accetta la connessione ed eleva le autorizzazioni UAC."),
     ].iter().cloned().collect();
