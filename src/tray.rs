@@ -12,17 +12,17 @@ pub fn make_tray() -> hbb_common::ResultType<()> {
         TrayEvent, TrayIconBuilder,
     };
     let icon;
-    #[cfg(any(target_os = "macos", target_os = "linux"))]
+    #[cfg(target_os = "macos")]
     {
         let mode = dark_light::detect();
-        const LIGHT: &[u8] = include_bytes!("../res/outlined-tray-light-x2.png");
-        const DARK: &[u8] = include_bytes!("../res/outlined-tray-dark-x2.png");
+        const LIGHT: &[u8] = include_bytes!("../res/mac-tray-light-x2.png");
+        const DARK: &[u8] = include_bytes!("../res/mac-tray-dark-x2.png");
         icon = match mode {
             dark_light::Mode::Dark => LIGHT,
             _ => DARK,
         };
     }
-    #[cfg(target_os = "windows")]
+    #[cfg(not(target_os = "macos"))]
     {
         icon = include_bytes!("../res/tray-icon.ico");
     }
@@ -61,6 +61,11 @@ pub fn make_tray() -> hbb_common::ResultType<()> {
     let mut docker_hiden = false;
 
     let open_func = move || {
+        if cfg!(not(feature = "flutter"))
+        {
+        crate::run_me::<&str>(vec![]).ok();
+        return;
+        }
         #[cfg(target_os = "macos")]
         crate::platform::macos::handle_application_should_open_untitled_file();
         #[cfg(target_os = "windows")]
@@ -74,7 +79,6 @@ pub fn make_tray() -> hbb_common::ResultType<()> {
                 .spawn()
                 .ok();
         }
-        // xdg-open?
         #[cfg(target_os = "linux")]
         if !std::process::Command::new("xdg-open")
             .arg("rustdesk://")
@@ -97,10 +101,12 @@ pub fn make_tray() -> hbb_common::ResultType<()> {
 
         if let Ok(event) = menu_channel.try_recv() {
             if event.id == quit_i.id() {
+                /* failed in windows, seems no permission to check system process
                 if !crate::check_process("--server", false) {
                     *control_flow = ControlFlow::Exit;
                     return;
                 }
+                */
                 crate::platform::uninstall_service(false);
             } else if event.id == open_i.id() {
                 open_func();

@@ -221,7 +221,7 @@ pub static ref T: std::collections::HashMap<&'static str, &'static str> =
         ("Remember me", "Ricordami"),
         ("Trust this device", "Registra questo dispositivo come attendibile"),
         ("Verification code", "Codice di verifica"),
-        ("verification_tip", "È stato rilevato un nuovo dispositivo ed è stato inviato un codice di verifica all'indirizzo email registrato.\nPer continuare l'accesso inserisci il codice di verifica."),
+        ("verification_tip", "È stato inviato un codice di verifica all'indirizzo email registrato, per accedere inserisci il codice di verifica."),
         ("Logout", "Esci"),
         ("Tags", "Tag"),
         ("Search ID", "Cerca ID"),
@@ -511,5 +511,6 @@ pub static ref T: std::collections::HashMap<&'static str, &'static str> =
         ("Collapse toolbar", "Comprimi barra strumenti"),
         ("Accept and Elevate", "Accetta ed eleva"),
         ("accept_and_elevate_btn_tooltip", "Accetta la connessione ed eleva le autorizzazioni UAC."),
+        ("clipboard_wait_response_timeout_tip", "Timeout attesa risposta della copia."),
     ].iter().cloned().collect();
 }

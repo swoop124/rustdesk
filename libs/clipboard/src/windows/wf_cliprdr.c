@@ -568,9 +568,12 @@ static CliprdrStream *CliprdrStream_New(UINT32 connID, ULONG index, void *pData,
 					success = TRUE;
 				}
 
-				instance->m_lSize.QuadPart = *((LONGLONG *)clipboard->req_fdata);
-				free(clipboard->req_fdata);
-				clipboard->req_fdata = NULL;
+				if (clipboard->req_fdata != NULL)
+				{
+					instance->m_lSize.QuadPart = *((LONGLONG *)clipboard->req_fdata);
+					free(clipboard->req_fdata);
+					clipboard->req_fdata = NULL;
+				}
 			}
 			else
 				success = TRUE;
@@ -1446,14 +1449,16 @@ static UINT cliprdr_send_format_list(wfClipboard *clipboard, UINT32 connID)
 	return rc;
 }
 
-UINT wait_response_event(wfClipboard *clipboard, HANDLE event, void **data)
+UINT wait_response_event(UINT32 connID, wfClipboard *clipboard, HANDLE event, void **data)
 {
 	UINT rc = ERROR_SUCCESS;
 	clipboard->context->IsStopped = FALSE;
-	// with default 3min timeout
-	for (int i = 0; i < 20 * 60 * 3; i++)
+	DWORD waitOnceTimeoutMillis = 50;
+	int waitCount = 1000 * clipboard->context->ResponseWaitTimeoutSecs / waitOnceTimeoutMillis;
+	int i = 0;
+	for (; i < waitCount; i++)
 	{
-		DWORD waitRes = WaitForSingleObject(event, 50);
+		DWORD waitRes = WaitForSingleObject(event, waitOnceTimeoutMillis);
 		if (waitRes == WAIT_TIMEOUT && clipboard->context->IsStopped == FALSE)
 		{
 			continue;
@@ -1484,7 +1489,21 @@ UINT wait_response_event(wfClipboard *clipboard, HANDLE event, void **data)
 		return rc;
 	}
 
-	if ((*data) != NULL)
+	if (i == waitCount)
+	{
+		NOTIFICATION_MESSAGE msg;
+		msg.type = 2;
+		msg.msg = "clipboard_wait_response_timeout_tip";
+		msg.details = NULL;
+		clipboard->context->NotifyClipboardMsg(connID, &msg);
+		rc = ERROR_INTERNAL_ERROR;
+
+		if (!ResetEvent(event))
+		{
+			// NOTE: critical error here, crash may be better
+		}
+	}
+	else if ((*data) != NULL)
 	{
 		if (!ResetEvent(event))
 		{
@@ -1516,7 +1535,7 @@ static UINT cliprdr_send_data_request(UINT32 connID, wfClipboard *clipboard, UIN
 		return rc;
 	}
 
-	wait_response_event(clipboard, clipboard->response_data_event, &clipboard->hmem);
+	wait_response_event(connID, clipboard, clipboard->response_data_event, &clipboard->hmem);
 }
 
 UINT cliprdr_send_request_filecontents(wfClipboard *clipboard, UINT32 connID, const void *streamid, ULONG index,
@@ -1544,7 +1563,7 @@ UINT cliprdr_send_request_filecontents(wfClipboard *clipboard, UINT32 connID, co
 		return rc;
 	}
 
-	return wait_response_event(clipboard, clipboard->req_fevent, (void**)&clipboard->req_fdata);
+	return wait_response_event(connID, clipboard, clipboard->req_fevent, (void **)&clipboard->req_fdata);
 }
 
 static UINT cliprdr_send_response_filecontents(
@@ -2792,6 +2811,13 @@ exit:
 
 	if (pDataObj)
 		IDataObject_Release(pDataObj);
+
+	// https://learn.microsoft.com/en-us/windows/win32/api/objidl/nf-objidl-idataobject-getdata#:~:text=value%20of%20its-,pUnkForRelease,-member.%20If%20pUnkForRelease
+	if (pStreamStc && vStgMedium.pUnkForRelease == NULL)
+	{
+		IStream_Release(pStreamStc);
+		pStreamStc = NULL;
+	}
 
 	if (rc != CHANNEL_RC_OK)
 	{

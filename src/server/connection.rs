@@ -63,6 +63,7 @@ lazy_static::lazy_static! {
     static ref SWITCH_SIDES_UUID: Arc::<Mutex<HashMap<String, (Instant, uuid::Uuid)>>> = Default::default();
 }
 pub static CLICK_TIME: AtomicI64 = AtomicI64::new(0);
+#[cfg(not(any(target_os = "android", target_os = "ios")))]
 pub static MOUSE_MOVE_TIME: AtomicI64 = AtomicI64::new(0);
 
 #[cfg(all(feature = "flutter", feature = "plugin_framework"))]
@@ -163,6 +164,7 @@ pub struct Connection {
     // by peer
     disable_audio: bool,
     // by peer
+    #[cfg(windows)]
     enable_file_transfer: bool,
     // by peer
     audio_sender: Option<MediaSender>,
@@ -190,6 +192,7 @@ pub struct Connection {
     #[cfg(all(target_os = "linux", feature = "linux_headless"))]
     #[cfg(not(any(feature = "flatpak", feature = "appimage")))]
     tx_desktop_ready: mpsc::Sender<()>,
+    closed: bool,
 }
 
 impl ConnInner {
@@ -291,6 +294,7 @@ impl Connection {
             show_remote_cursor: false,
             ip: "".to_owned(),
             disable_audio: false,
+            #[cfg(windows)]
             enable_file_transfer: false,
             disable_clipboard: false,
             disable_keyboard: false,
@@ -317,8 +321,10 @@ impl Connection {
             #[cfg(all(target_os = "linux", feature = "linux_headless"))]
             #[cfg(not(any(feature = "flatpak", feature = "appimage")))]
             tx_desktop_ready: _tx_desktop_ready,
+            closed: false,
         };
         if !conn.on_open(addr).await {
+            conn.closed = true;
             // sleep to ensure msg got received.
             sleep(1.).await;
             return;
@@ -560,7 +566,7 @@ impl Connection {
                             match &m.union {
                                 Some(misc::Union::StopService(_)) => {
                                     conn.send_close_reason_no_retry("").await;
-                                    conn.on_close("stop service", true).await;
+                                    conn.on_close("stop service", false).await;
                                     break;
                                 }
                                 _ => {},
@@ -631,6 +637,7 @@ impl Connection {
             #[cfg(not(any(target_os = "android", target_os = "ios")))]
             try_stop_record_cursor_pos();
         }
+        conn.on_close("End", true).await;
         log::info!("#{} connection loop exited", id);
     }
 
@@ -818,7 +825,6 @@ impl Connection {
                 .await;
             Self::post_alarm_audit(
                 AlarmAuditType::IpWhitelist, //"ip whitelist",
-                true,
                 json!({ "ip":addr.ip() }),
             );
             return false;
@@ -828,9 +834,6 @@ impl Connection {
 
     async fn on_open(&mut self, addr: SocketAddr) -> bool {
         log::debug!("#{} Connection opened from {}.", self.inner.id, addr);
-        if !self.check_privacy_mode_on().await {
-            return false;
-        }
         if !self.check_whitelist(&addr).await {
             return false;
         }
@@ -868,6 +871,7 @@ impl Connection {
         v["id"] = json!(Config::get_id());
         v["uuid"] = json!(crate::encode64(hbb_common::get_uuid()));
         v["conn_id"] = json!(self.inner.id);
+        v["session_id"] = json!(self.lr.session_id);
         tokio::spawn(async move {
             allow_err!(Self::post_audit_async(url, v).await);
         });
@@ -908,7 +912,7 @@ impl Connection {
         });
     }
 
-    pub fn post_alarm_audit(typ: AlarmAuditType, from_remote: bool, info: Value) {
+    pub fn post_alarm_audit(typ: AlarmAuditType, info: Value) {
         let url = crate::get_audit_server(
             Config::get_option("api-server"),
             Config::get_option("custom-rendezvous-server"),
@@ -921,7 +925,6 @@ impl Connection {
         v["id"] = json!(Config::get_id());
         v["uuid"] = json!(crate::encode64(hbb_common::get_uuid()));
         v["typ"] = json!(typ as i8);
-        v["from_remote"] = json!(from_remote);
         v["info"] = serde_json::Value::String(info.to_string());
         tokio::spawn(async move {
             allow_err!(Self::post_audit_async(url, v).await);
@@ -950,7 +953,6 @@ impl Connection {
         let mut res = LoginResponse::new();
         let mut pi = PeerInfo {
             username: username.clone(),
-            conn_id: self.inner.id,
             version: VERSION.to_owned(),
             ..Default::default()
         };
@@ -1117,6 +1119,7 @@ impl Connection {
         self.audio && !self.disable_audio
     }
 
+    #[cfg(windows)]
     fn file_transfer_enabled(&self) -> bool {
         self.file && self.enable_file_transfer
     }
@@ -1229,6 +1232,7 @@ impl Connection {
             .lock()
             .unwrap()
             .retain(|_, s| s.last_recv_time.lock().unwrap().elapsed() < SESSION_TIMEOUT);
+        // last_recv_time is a mutex variable shared with connection, can be updated lively.
         if let Some(session) = session {
             if session.name == self.lr.my_name
                 && session.session_id == self.lr.session_id
@@ -1344,7 +1348,11 @@ impl Connection {
                         }
                     }
                 }
-                _ => {}
+                _ => {
+                    if !self.check_privacy_mode_on().await {
+                        return false;
+                    }
+                }
             }
 
             #[cfg(all(target_os = "linux", feature = "linux_headless"))]
@@ -1446,7 +1454,6 @@ impl Connection {
                         .await;
                     Self::post_alarm_audit(
                         AlarmAuditType::ManyWrongPassword,
-                        true,
                         json!({
                                     "ip":self.ip,
                         }),
@@ -1455,7 +1462,6 @@ impl Connection {
                     self.send_login_error("Please try 1 minute later").await;
                     Self::post_alarm_audit(
                         AlarmAuditType::FrequentAttempt,
-                        true,
                         json!({
                                     "ip":self.ip,
                         }),
@@ -2178,6 +2184,10 @@ impl Connection {
     }
 
     async fn on_close(&mut self, reason: &str, lock: bool) {
+        if self.closed {
+            return;
+        }
+        self.closed = true;
         log::info!("#{} Connection closed: {}", self.inner.id(), reason);
         if lock && self.lock_after_session_end && self.keyboard {
             #[cfg(not(any(target_os = "android", target_os = "ios")))]
