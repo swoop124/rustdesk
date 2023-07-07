@@ -158,10 +158,7 @@ class ConnectionManagerState extends State<ConnectionManager> {
                         message: key,
                         waitDuration: Duration(seconds: 1),
                         child: label),
-                    Obx(() => Offstage(
-                        offstage:
-                            !(client?.hasUnreadChatMessage.value ?? false),
-                        child: Icon(Icons.circle, color: Colors.red, size: 10)))
+                    unreadMessageCountBuilder(client?.unreadChatMessageCount),
                   ],
                 );
               },
@@ -170,7 +167,9 @@ class ConnectionManagerState extends State<ConnectionManager> {
                   Consumer<ChatModel>(
                     builder: (_, model, child) => model.isShowCMChatPage
                         ? Expanded(
-                            child: ChatPage(),
+                            child: buildRemoteBlock(
+                              child: ChatPage(),
+                            ),
                             flex: (kConnectionManagerWindowSizeOpenChat.width -
                                     kConnectionManagerWindowSizeClosedChat
                                         .width)
