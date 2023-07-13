@@ -233,6 +233,7 @@ pub static ref T: std::collections::HashMap<&'static str, &'static str> =
         ("Username missed", "Nome utente mancante"),
         ("Password missed", "Password mancante"),
         ("Wrong credentials", "Credenziali errate"),
+        ("The verification code is incorrect or has expired", "Il codice di verifica non è corretto o è scaduto"),
         ("Edit Tag", "Modifica tag"),
         ("Unremember Password", "Dimentica password"),
         ("Favorites", "Preferiti"),
@@ -512,5 +513,9 @@ pub static ref T: std::collections::HashMap<&'static str, &'static str> =
         ("Accept and Elevate", "Accetta ed eleva"),
         ("accept_and_elevate_btn_tooltip", "Accetta la connessione ed eleva le autorizzazioni UAC."),
         ("clipboard_wait_response_timeout_tip", "Timeout attesa risposta della copia."),
-    ].iter().cloned().collect();
+        ("Incoming connection", "Connessioni in entrata"),
+        ("Outgoing connection", "Conenssioni in uscita"),
+        ("Exit", "Esci da RustDesk"),
+        ("Open", "Apri RustDesk"),
+   ].iter().cloned().collect();
 }

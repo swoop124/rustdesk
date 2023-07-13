@@ -233,6 +233,7 @@ pub static ref T: std::collections::HashMap<&'static str, &'static str> =
         ("Username missed", "缺少使用者名稱"),
         ("Password missed", "缺少密碼"),
         ("Wrong credentials", "提供的登入資訊有誤"),
+        ("The verification code is incorrect or has expired", ""),
         ("Edit Tag", "編輯標籤"),
         ("Unremember Password", "忘掉密碼"),
         ("Favorites", "我的最愛"),
@@ -512,5 +513,9 @@ pub static ref T: std::collections::HashMap<&'static str, &'static str> =
         ("Accept and Elevate", ""),
         ("accept_and_elevate_btn_tooltip", ""),
         ("clipboard_wait_response_timeout_tip", ""),
+        ("Incoming connection", "收到的連接"),
+        ("Outgoing connection", "發起的連接"),
+        ("Exit", ""),
+        ("Open", ""),
     ].iter().cloned().collect();
 }

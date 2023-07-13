@@ -176,6 +176,10 @@ class MyTheme {
   static const Color dark = Colors.black87;
   static const Color button = Color(0xFF2C8CFF);
   static const Color hoverBorder = Color(0xFF999999);
+  static const Color bordDark = Colors.white24;
+  static const Color bordLight = Colors.black26;
+  static const Color dividerDark = Colors.white38;
+  static const Color dividerLight = Colors.black38;
 
   // ListTile
   static const ListTileThemeData listTileTheme = ListTileThemeData(
@@ -552,18 +556,9 @@ void window_on_top(int? id) async {
   if (id == null) {
     print("Bring window on top");
     // main window
-    if (desktopType == DesktopType.cm &&
-        !(await windowManager.isMinimized() ||
-            !await windowManager.isVisible())) {
-      await windowManager.setAlwaysOnTop(true);
-      Future.delayed(Duration(microseconds: 500), () async {
-        windowManager.setAlwaysOnTop(false);
-      });
-    } else {
-      windowManager.restore();
-      windowManager.show();
-      windowManager.focus();
-    }
+    windowManager.restore();
+    windowManager.show();
+    windowManager.focus();
     rustDeskWinManager.registerActiveWindow(kWindowMainId);
   } else {
     WindowController.fromWindowId(id)
@@ -1593,6 +1588,7 @@ bool handleUriLink({List<String>? cmdArgs, Uri? uri, String? uriString}) {
   List<String>? args;
   if (cmdArgs != null) {
     args = cmdArgs;
+    // rustdesk <uri link>
     if (args.isNotEmpty && args[0].startsWith(kUniLinksPrefix)) {
       final uri = Uri.tryParse(args[0]);
       if (uri != null) {
@@ -1701,6 +1697,10 @@ List<String>? urlLinkToCmdArgs(Uri uri) {
     if (uri.path.length > 1) {
       id = uri.path.substring(1);
     }
+  } else if (uri.authority.length > 2 && uri.path.length <= 1) {
+    // rustdesk://<connect-id>
+    command = '--connect';
+    id = uri.authority;
   }
 
   List<String> args = List.empty(growable: true);
@@ -2193,19 +2193,33 @@ Widget buildRemoteBlock({required Widget child, WhetherUseRemoteBlock? use}) {
       ));
 }
 
-Widget unreadMessageCountBuilder(RxInt? count) {
+Widget unreadMessageCountBuilder(RxInt? count,
+    {double? size, double? fontSize}) {
   return Obx(() => Offstage(
       offstage: !((count?.value ?? 0) > 0),
       child: Container(
-        width: 16,
-        height: 16,
+        width: size ?? 16,
+        height: size ?? 16,
         decoration: BoxDecoration(
           color: Colors.red,
           shape: BoxShape.circle,
         ),
         child: Center(
           child: Text("${count?.value ?? 0}",
-              maxLines: 1, style: TextStyle(color: Colors.white, fontSize: 10)),
+              maxLines: 1,
+              style: TextStyle(color: Colors.white, fontSize: fontSize ?? 10)),
         ),
-      ).marginOnly(left: 4)));
+      )));
+}
+
+Widget unreadTopRightBuilder(RxInt? count, {Widget? icon}) {
+  return Stack(
+    children: [
+      icon ?? Icon(Icons.chat),
+      Positioned(
+          top: 0,
+          right: 0,
+          child: unreadMessageCountBuilder(count, size: 12, fontSize: 8))
+    ],
+  );
 }

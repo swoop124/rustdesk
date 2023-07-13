@@ -233,6 +233,7 @@ pub static ref T: std::collections::HashMap<&'static str, &'static str> =
         ("Username missed", "Імʼя користувача відсутнє"),
         ("Password missed", "Забули пароль"),
         ("Wrong credentials", "Неправильні дані"),
+        ("The verification code is incorrect or has expired", ""),
         ("Edit Tag", "Редагувати тег"),
         ("Unremember Password", "Не зберігати пароль"),
         ("Favorites", "Вибране"),
@@ -512,5 +513,9 @@ pub static ref T: std::collections::HashMap<&'static str, &'static str> =
         ("Accept and Elevate", "Погодитись та розширити права"),
         ("accept_and_elevate_btn_tooltip", "Погодити підключення та розширити дозволи UAC."),
         ("clipboard_wait_response_timeout_tip", "Вийшов час очікування копіювання."),
+        ("Incoming connection", ""),
+        ("Outgoing connection", ""),
+        ("Exit", ""),
+        ("Open", ""),
     ].iter().cloned().collect();
 }
