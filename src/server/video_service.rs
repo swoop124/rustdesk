@@ -36,7 +36,7 @@ use hbb_common::{
 use scrap::Capturer;
 use scrap::{
     aom::AomEncoderConfig,
-    codec::{Encoder, EncoderCfg, HwEncoderConfig},
+    codec::{Encoder, EncoderCfg, HwEncoderConfig, Quality},
     record::{Recorder, RecorderContext},
     vpxcodec::{VpxEncoderConfig, VpxVideoCodecId},
     CodecName, Display, TraitCapturer,
@@ -144,7 +144,7 @@ pub fn capture_cursor_embedded() -> bool {
 
 #[inline]
 pub fn notify_video_frame_fetched(conn_id: i32, frame_tm: Option<Instant>) {
-    FRAME_FETCHED_NOTIFIER.0.send((conn_id, frame_tm)).unwrap()
+    FRAME_FETCHED_NOTIFIER.0.send((conn_id, frame_tm)).ok();
 }
 
 #[inline]
@@ -503,7 +503,7 @@ fn run(sp: GenericService) -> ResultType<()> {
     #[cfg(not(any(target_os = "android", target_os = "ios")))]
     let _wake_lock = get_wake_lock();
 
-    // ensure_inited() is needed because release_resource() may be called.
+    // ensure_inited() is needed because clear() may be called.
     #[cfg(target_os = "linux")]
     super::wayland::ensure_inited()?;
     #[cfg(windows)]
@@ -514,40 +514,17 @@ fn run(sp: GenericService) -> ResultType<()> {
     let mut c = get_capturer(true, last_portable_service_running)?;
 
     let mut video_qos = VIDEO_QOS.lock().unwrap();
-    video_qos.set_size(c.width as _, c.height as _);
-    let mut spf = video_qos.spf();
-    let bitrate = video_qos.generate_bitrate()?;
-    let abr = video_qos.check_abr_config();
+    video_qos.refresh(None);
+    let mut spf;
+    let mut quality = video_qos.quality();
+    let abr = VideoQoS::abr_enabled();
+    log::info!("init quality={:?}, abr enabled:{}", quality, abr);
+    let codec_name = Encoder::negotiated_codec();
+    let recorder = get_recorder(c.width, c.height, &codec_name);
+    let last_recording =
+        (recorder.lock().unwrap().is_some() || video_qos.record()) && codec_name != CodecName::AV1;
     drop(video_qos);
-    log::info!("init bitrate={}, abr enabled:{}", bitrate, abr);
-
-    let encoder_cfg = match Encoder::negotiated_codec() {
-        scrap::CodecName::H264(name) | scrap::CodecName::H265(name) => {
-            EncoderCfg::HW(HwEncoderConfig {
-                name,
-                width: c.width,
-                height: c.height,
-                bitrate: bitrate as _,
-            })
-        }
-        name @ (scrap::CodecName::VP8 | scrap::CodecName::VP9) => {
-            EncoderCfg::VPX(VpxEncoderConfig {
-                width: c.width as _,
-                height: c.height as _,
-                bitrate,
-                codec: if name == scrap::CodecName::VP8 {
-                    VpxVideoCodecId::VP8
-                } else {
-                    VpxVideoCodecId::VP9
-                },
-            })
-        }
-        scrap::CodecName::AV1 => EncoderCfg::AOM(AomEncoderConfig {
-            width: c.width as _,
-            height: c.height as _,
-            bitrate: bitrate as _,
-        }),
-    };
+    let encoder_cfg = get_encoder_config(&c, quality, last_recording);
 
     let mut encoder;
     match Encoder::new(encoder_cfg) {
@@ -555,6 +532,7 @@ fn run(sp: GenericService) -> ResultType<()> {
         Err(err) => bail!("Failed to create encoder: {}", err),
     }
     c.set_use_yuv(encoder.use_yuv());
+    VIDEO_QOS.lock().unwrap().store_bitrate(encoder.bitrate());
 
     if *SWITCH.lock().unwrap() {
         log::debug!("Broadcasting display switch");
@@ -595,8 +573,6 @@ fn run(sp: GenericService) -> ResultType<()> {
     let mut try_gdi = 1;
     #[cfg(windows)]
     log::info!("gdi: {}", c.is_gdi());
-    let codec_name = Encoder::negotiated_codec();
-    let recorder = get_recorder(c.width, c.height, &codec_name);
     #[cfg(windows)]
     start_uac_elevation_check();
 
@@ -608,14 +584,17 @@ fn run(sp: GenericService) -> ResultType<()> {
         check_uac_switch(c.privacy_mode_id, c._capturer_privacy_mode_id)?;
 
         let mut video_qos = VIDEO_QOS.lock().unwrap();
-        if video_qos.check_if_updated() && video_qos.target_bitrate > 0 {
-            log::debug!(
-                "qos is updated, target_bitrate:{}, fps:{}",
-                video_qos.target_bitrate,
-                video_qos.fps
-            );
-            allow_err!(encoder.set_bitrate(video_qos.target_bitrate));
-            spf = video_qos.spf();
+        spf = video_qos.spf();
+        if quality != video_qos.quality() {
+            log::debug!("quality: {:?} -> {:?}", quality, video_qos.quality());
+            quality = video_qos.quality();
+            allow_err!(encoder.set_quality(quality));
+            video_qos.store_bitrate(encoder.bitrate());
+        }
+        let recording = (recorder.lock().unwrap().is_some() || video_qos.record())
+            && codec_name != CodecName::AV1;
+        if recording != last_recording {
+            bail!("SWITCH");
         }
         drop(video_qos);
 
@@ -623,6 +602,8 @@ fn run(sp: GenericService) -> ResultType<()> {
             bail!("SWITCH");
         }
         if c.current != *CURRENT_DISPLAY.lock().unwrap() {
+            #[cfg(target_os = "linux")]
+            super::wayland::clear();
             *SWITCH.lock().unwrap() = true;
             bail!("SWITCH");
         }
@@ -657,6 +638,8 @@ fn run(sp: GenericService) -> ResultType<()> {
             if let Some(msg_out) = check_get_displays_changed_msg() {
                 sp.send(msg_out);
                 log::info!("Displays changed");
+                #[cfg(target_os = "linux")]
+                super::wayland::clear();
                 *SWITCH.lock().unwrap() = true;
                 bail!("SWITCH");
             }
@@ -725,7 +708,7 @@ fn run(sp: GenericService) -> ResultType<()> {
                             // Do not reset the capturer for now, as it will cause the prompt to show every few minutes.
                             // https://github.com/rustdesk/rustdesk/issues/4276
                             //
-                            // super::wayland::release_resource();
+                            // super::wayland::clear();
                             // bail!("Wayland capturer none 100 times, try restart capture");
                         }
                     }
@@ -734,6 +717,8 @@ fn run(sp: GenericService) -> ResultType<()> {
             Err(err) => {
                 if check_display_changed(c.ndisplay, c.current, c.width, c.height) {
                     log::info!("Displays changed");
+                    #[cfg(target_os = "linux")]
+                    super::wayland::clear();
                     *SWITCH.lock().unwrap() = true;
                     bail!("SWITCH");
                 }
@@ -778,11 +763,44 @@ fn run(sp: GenericService) -> ResultType<()> {
     }
 
     #[cfg(target_os = "linux")]
-    if !scrap::is_x11() {
-        super::wayland::release_resource();
-    }
+    super::wayland::clear();
 
     Ok(())
+}
+
+fn get_encoder_config(c: &CapturerInfo, quality: Quality, recording: bool) -> EncoderCfg {
+    // https://www.wowza.com/community/t/the-correct-keyframe-interval-in-obs-studio/95162
+    let keyframe_interval = if recording { Some(240) } else { None };
+    match Encoder::negotiated_codec() {
+        scrap::CodecName::H264(name) | scrap::CodecName::H265(name) => {
+            EncoderCfg::HW(HwEncoderConfig {
+                name,
+                width: c.width,
+                height: c.height,
+                quality,
+                keyframe_interval,
+            })
+        }
+        name @ (scrap::CodecName::VP8 | scrap::CodecName::VP9) => {
+            EncoderCfg::VPX(VpxEncoderConfig {
+                width: c.width as _,
+                height: c.height as _,
+                quality,
+                codec: if name == scrap::CodecName::VP8 {
+                    VpxVideoCodecId::VP8
+                } else {
+                    VpxVideoCodecId::VP9
+                },
+                keyframe_interval,
+            })
+        }
+        scrap::CodecName::AV1 => EncoderCfg::AOM(AomEncoderConfig {
+            width: c.width as _,
+            height: c.height as _,
+            quality,
+            keyframe_interval,
+        }),
+    }
 }
 
 fn get_recorder(

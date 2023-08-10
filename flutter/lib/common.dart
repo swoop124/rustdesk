@@ -11,6 +11,7 @@ import 'package:flutter/foundation.dart';
 import 'package:flutter/gestures.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
+import 'package:flutter_hbb/common/formatter/id_formatter.dart';
 import 'package:flutter_hbb/desktop/widgets/refresh_wrapper.dart';
 import 'package:flutter_hbb/desktop/widgets/tabbar_widget.dart';
 import 'package:flutter_hbb/main.dart';
@@ -19,7 +20,6 @@ import 'package:flutter_hbb/utils/multi_window_manager.dart';
 import 'package:flutter_hbb/utils/platform_channel.dart';
 import 'package:flutter_svg/flutter_svg.dart';
 import 'package:get/get.dart';
-import 'package:texture_rgba_renderer/texture_rgba_renderer.dart';
 import 'package:uni_links/uni_links.dart';
 import 'package:url_launcher/url_launcher.dart';
 import 'package:uuid/uuid.dart';
@@ -46,11 +46,6 @@ var isWebDesktop = false;
 var isMobile = isAndroid || isIOS;
 var version = "";
 int androidVersion = 0;
-
-/// Incriment count for textureId.
-int _textureId = 0;
-int get newTextureId => _textureId++;
-final textureRenderer = TextureRgbaRenderer();
 
 /// only available for Windows target
 int windowsBuildNumber = 0;
@@ -95,6 +90,7 @@ class IconFont {
   static const IconData roundClose = IconData(0xe6ed, fontFamily: _family2);
   static const IconData addressBook =
       IconData(0xe602, fontFamily: "AddressBook");
+  static const IconData checkbox = IconData(0xe7d6, fontFamily: "CheckBox");
 }
 
 class ColorThemeExtension extends ThemeExtension<ColorThemeExtension> {
@@ -549,7 +545,7 @@ closeConnection({String? id}) {
   }
 }
 
-void window_on_top(int? id) async {
+void windowOnTop(int? id) async {
   if (!isDesktop) {
     return;
   }
@@ -689,9 +685,12 @@ class OverlayDialogManager {
   String showLoading(String text,
       {bool clickMaskDismiss = false,
       bool showCancel = true,
-      VoidCallback? onCancel}) {
-    final tag = _tagCount.toString();
-    _tagCount++;
+      VoidCallback? onCancel,
+      String? tag}) {
+    if (tag == null) {
+      tag = _tagCount.toString();
+      _tagCount++;
+    }
     show((setState, close, context) {
       cancel() {
         dismissAll();
@@ -1222,7 +1221,7 @@ FFI get gFFI => _globalFFI;
 
 Future<void> initGlobalFFI() async {
   debugPrint("_globalFFI init");
-  _globalFFI = FFI();
+  _globalFFI = FFI(null);
   debugPrint("_globalFFI init end");
   // after `put`, can also be globally found by Get.find<FFI>();
   Get.put(_globalFFI, permanent: true);
@@ -1243,7 +1242,7 @@ bool option2bool(String option, String value) {
       option == "stop-service" ||
       option == "direct-server" ||
       option == "stop-rendezvous-service" ||
-      option == "force-always-relay") {
+      option == kOptionForceAlwaysRelay) {
     res = value == "Y";
   } else {
     assert(false);
@@ -1260,13 +1259,43 @@ String bool2option(String option, bool b) {
       option == "stop-service" ||
       option == "direct-server" ||
       option == "stop-rendezvous-service" ||
-      option == "force-always-relay") {
+      option == kOptionForceAlwaysRelay) {
     res = b ? 'Y' : '';
   } else {
     assert(false);
     res = b ? 'Y' : 'N';
   }
   return res;
+}
+
+mainSetBoolOption(String key, bool value) async {
+  String v = bool2option(key, value);
+  await bind.mainSetOption(key: key, value: v);
+}
+
+Future<bool> mainGetBoolOption(String key) async {
+  return option2bool(key, await bind.mainGetOption(key: key));
+}
+
+bool mainGetBoolOptionSync(String key) {
+  return option2bool(key, bind.mainGetOptionSync(key: key));
+}
+
+mainSetLocalBoolOption(String key, bool value) async {
+  String v = bool2option(key, value);
+  await bind.mainSetLocalOption(key: key, value: v);
+}
+
+bool mainGetLocalBoolOptionSync(String key) {
+  return option2bool(key, bind.mainGetLocalOption(key: key));
+}
+
+bool mainGetPeerBoolOptionSync(String id, String key) {
+  return option2bool(key, bind.mainGetPeerOptionSync(id: id, key: key));
+}
+
+mainSetPeerBoolOptionSync(String id, String key, bool v) {
+  bind.mainSetPeerOptionSync(id: id, key: key, value: bool2option(key, v));
 }
 
 Future<bool> matchPeer(String searchText, Peer peer) async {
@@ -1337,7 +1366,9 @@ class LastWindowPosition {
       return LastWindowPosition(m["width"], m["height"], m["offsetWidth"],
           m["offsetHeight"], m["isMaximized"]);
     } catch (e) {
-      debugPrintStack(label: e.toString());
+      debugPrintStack(
+          label:
+              'Failed to load LastWindowPosition "$content" ${e.toString()}');
       return null;
     }
   }
@@ -1350,15 +1381,15 @@ Future<void> saveWindowPosition(WindowType type, {int? windowId}) async {
     debugPrint(
         "Error: windowId cannot be null when saving positions for sub window");
   }
+
+  late Offset position;
+  late Size sz;
+  late bool isMaximized;
   switch (type) {
     case WindowType.Main:
-      final position = await windowManager.getPosition();
-      final sz = await windowManager.getSize();
-      final isMaximized = await windowManager.isMaximized();
-      final pos = LastWindowPosition(
-          sz.width, sz.height, position.dx, position.dy, isMaximized);
-      await bind.setLocalFlutterConfig(
-          k: kWindowPrefix + type.name, v: pos.toString());
+      position = await windowManager.getPosition();
+      sz = await windowManager.getSize();
+      isMaximized = await windowManager.isMaximized();
       break;
     default:
       final wc = WindowController.fromWindowId(windowId!);
@@ -1369,38 +1400,53 @@ Future<void> saveWindowPosition(WindowType type, {int? windowId}) async {
         debugPrint("Failed to get frame of window $windowId, it may be hidden");
         return;
       }
-      final position = frame.topLeft;
-      final sz = frame.size;
-      final isMaximized = await wc.isMaximized();
-      final pos = LastWindowPosition(
-          sz.width, sz.height, position.dx, position.dy, isMaximized);
-      debugPrint(
-          "saving frame: $windowId: ${pos.width}/${pos.height}, offset:${pos.offsetWidth}/${pos.offsetHeight}");
-      await bind.setLocalFlutterConfig(
-          k: kWindowPrefix + type.name, v: pos.toString());
+      position = frame.topLeft;
+      sz = frame.size;
+      isMaximized = await wc.isMaximized();
       break;
+  }
+  if (Platform.isWindows) {
+    const kMinOffset = -10000;
+    const kMaxOffset = 10000;
+    if (position.dx < kMinOffset ||
+        position.dy < kMinOffset ||
+        position.dx > kMaxOffset ||
+        position.dy > kMaxOffset) {
+      debugPrint("Invalid position: $position, ignore saving position");
+      return;
+    }
+  }
+
+  final pos = LastWindowPosition(
+      sz.width, sz.height, position.dx, position.dy, isMaximized);
+  debugPrint(
+      "Saving frame: $windowId: ${pos.width}/${pos.height}, offset:${pos.offsetWidth}/${pos.offsetHeight}");
+
+  await bind.setLocalFlutterConfig(
+      k: kWindowPrefix + type.name, v: pos.toString());
+
+  if (type == WindowType.RemoteDesktop && windowId != null) {
+    await _saveSessionWindowPosition(type, windowId, pos);
+  }
+}
+
+Future _saveSessionWindowPosition(
+    WindowType windowType, int windowId, LastWindowPosition pos) async {
+  final remoteList = await DesktopMultiWindow.invokeMethod(
+      windowId, kWindowEventGetRemoteList, null);
+  if (remoteList != null) {
+    for (final peerId in remoteList.split(',')) {
+      bind.sessionSetFlutterConfigByPeerId(
+          id: peerId, k: kWindowPrefix + windowType.name, v: pos.toString());
+    }
   }
 }
 
 Future<Size> _adjustRestoreMainWindowSize(double? width, double? height) async {
-  const double minWidth = 600;
-  const double minHeight = 100;
-  double maxWidth = (((isDesktop || isWebDesktop)
-          ? kDesktopMaxDisplayWidth
-          : kMobileMaxDisplayWidth))
-      .toDouble();
-  double maxHeight = ((isDesktop || isWebDesktop)
-          ? kDesktopMaxDisplayHeight
-          : kMobileMaxDisplayHeight)
-      .toDouble();
-
-  if (isDesktop || isWebDesktop) {
-    final screen = (await window_size.getWindowInfo()).screen;
-    if (screen != null) {
-      maxWidth = screen.visibleFrame.width;
-      maxHeight = screen.visibleFrame.height;
-    }
-  }
+  const double minWidth = 1;
+  const double minHeight = 1;
+  const double maxWidth = 6480;
+  const double maxHeight = 6480;
 
   final defaultWidth =
       ((isDesktop || isWebDesktop) ? 1280 : kMobileDefaultDisplayWidth)
@@ -1412,64 +1458,79 @@ Future<Size> _adjustRestoreMainWindowSize(double? width, double? height) async {
   double restoreHeight = height ?? defaultHeight;
 
   if (restoreWidth < minWidth) {
-    restoreWidth = minWidth;
+    restoreWidth = defaultWidth;
   }
   if (restoreHeight < minHeight) {
-    restoreHeight = minHeight;
+    restoreHeight = defaultHeight;
   }
   if (restoreWidth > maxWidth) {
-    restoreWidth = maxWidth;
+    restoreWidth = defaultWidth;
   }
   if (restoreHeight > maxHeight) {
-    restoreHeight = maxHeight;
+    restoreHeight = defaultHeight;
   }
   return Size(restoreWidth, restoreHeight);
 }
 
 /// return null means center
 Future<Offset?> _adjustRestoreMainWindowOffset(
-    double? left, double? top) async {
-  if (left == null || top == null) {
-    await windowManager.center();
-  } else {
-    double windowLeft = max(0.0, left);
-    double windowTop = max(0.0, top);
+  double? left,
+  double? top,
+  double? width,
+  double? height,
+) async {
+  if (left == null || top == null || width == null || height == null) {
+    return null;
+  }
 
-    double frameLeft = double.infinity;
-    double frameTop = double.infinity;
-    double frameRight = ((isDesktop || isWebDesktop)
-            ? kDesktopMaxDisplayWidth
-            : kMobileMaxDisplayWidth)
-        .toDouble();
-    double frameBottom = ((isDesktop || isWebDesktop)
-            ? kDesktopMaxDisplayHeight
-            : kMobileMaxDisplayHeight)
-        .toDouble();
+  double? frameLeft;
+  double? frameTop;
+  double? frameRight;
+  double? frameBottom;
 
-    if (isDesktop || isWebDesktop) {
-      for (final screen in await window_size.getScreenList()) {
-        frameLeft = min(screen.visibleFrame.left, frameLeft);
-        frameTop = min(screen.visibleFrame.top, frameTop);
-        frameRight = max(screen.visibleFrame.right, frameRight);
-        frameBottom = max(screen.visibleFrame.bottom, frameBottom);
-      }
-    }
-
-    if (windowLeft < frameLeft ||
-        windowLeft > frameRight ||
-        windowTop < frameTop ||
-        windowTop > frameBottom) {
-      return null;
-    } else {
-      return Offset(windowLeft, windowTop);
+  if (isDesktop || isWebDesktop) {
+    for (final screen in await window_size.getScreenList()) {
+      frameLeft = frameLeft == null
+          ? screen.visibleFrame.left
+          : min(screen.visibleFrame.left, frameLeft);
+      frameTop = frameTop == null
+          ? screen.visibleFrame.top
+          : min(screen.visibleFrame.top, frameTop);
+      frameRight = frameRight == null
+          ? screen.visibleFrame.right
+          : max(screen.visibleFrame.right, frameRight);
+      frameBottom = frameBottom == null
+          ? screen.visibleFrame.bottom
+          : max(screen.visibleFrame.bottom, frameBottom);
     }
   }
-  return null;
+  if (frameLeft == null) {
+    frameLeft = 0.0;
+    frameTop = 0.0;
+    frameRight = ((isDesktop || isWebDesktop)
+            ? kDesktopMaxDisplaySize
+            : kMobileMaxDisplaySize)
+        .toDouble();
+    frameBottom = ((isDesktop || isWebDesktop)
+            ? kDesktopMaxDisplaySize
+            : kMobileMaxDisplaySize)
+        .toDouble();
+  }
+  final minWidth = 10.0;
+  if ((left + minWidth) > frameRight! ||
+      (top + minWidth) > frameBottom! ||
+      (left + width - minWidth) < frameLeft ||
+      (top - minWidth) < frameTop!) {
+    return null;
+  } else {
+    return Offset(left, top);
+  }
 }
 
 /// Restore window position and size on start
 /// Note that windowId must be provided if it's subwindow
-Future<bool> restoreWindowPosition(WindowType type, {int? windowId}) async {
+Future<bool> restoreWindowPosition(WindowType type,
+    {int? windowId, String? peerId}) async {
   if (bind
       .mainGetEnv(key: "DISABLE_RUSTDESK_RESTORE_WINDOW_POSITION")
       .isNotEmpty) {
@@ -1478,12 +1539,42 @@ Future<bool> restoreWindowPosition(WindowType type, {int? windowId}) async {
   if (type != WindowType.Main && windowId == null) {
     debugPrint(
         "Error: windowId cannot be null when saving positions for sub window");
+    return false;
   }
-  final pos = bind.getLocalFlutterConfig(k: kWindowPrefix + type.name);
+
+  bool isRemotePeerPos = false;
+  String? pos;
+  // No need to check mainGetLocalBoolOptionSync(kOptionOpenNewConnInTabs)
+  // Though "open in tabs" is true and the new window restore peer position, it's ok.  
+  if (type == WindowType.RemoteDesktop && windowId != null && peerId != null) {
+    // If the restore position is called by main window, and the peer id is not null
+    // then we may need to get the position by reading the peer config.
+    // Because the session may not be read at this time.
+    if (desktopType == DesktopType.main) {
+      pos = bind.mainGetPeerFlutterConfigSync(
+          id: peerId, k: kWindowPrefix + type.name);
+    } else {
+      pos = await bind.sessionGetFlutterConfigByPeerId(
+          id: peerId, k: kWindowPrefix + type.name);
+    }
+    isRemotePeerPos = pos != null;
+  }
+  pos ??= bind.getLocalFlutterConfig(k: kWindowPrefix + type.name);
+
   var lpos = LastWindowPosition.loadFromString(pos);
   if (lpos == null) {
     debugPrint("no window position saved, ignoring position restoration");
     return false;
+  }
+  if (type == WindowType.RemoteDesktop &&
+      !isRemotePeerPos &&
+      windowId != null) {
+    if (lpos.offsetWidth != null) {
+      lpos.offsetWidth = lpos.offsetWidth! + windowId * 20;
+    }
+    if (lpos.offsetHeight != null) {
+      lpos.offsetHeight = lpos.offsetHeight! + windowId * 20;
+    }
   }
 
   switch (type) {
@@ -1494,7 +1585,11 @@ Future<bool> restoreWindowPosition(WindowType type, {int? windowId}) async {
         final size =
             await _adjustRestoreMainWindowSize(lpos.width, lpos.height);
         final offset = await _adjustRestoreMainWindowOffset(
-            lpos.offsetWidth, lpos.offsetHeight);
+          lpos.offsetWidth,
+          lpos.offsetHeight,
+          size.width,
+          size.height,
+        );
         await windowManager.setSize(size);
         if (offset == null) {
           await windowManager.center();
@@ -1511,7 +1606,11 @@ Future<bool> restoreWindowPosition(WindowType type, {int? windowId}) async {
         final size =
             await _adjustRestoreMainWindowSize(lpos.width, lpos.height);
         final offset = await _adjustRestoreMainWindowOffset(
-            lpos.offsetWidth, lpos.offsetHeight);
+          lpos.offsetWidth,
+          lpos.offsetHeight,
+          size.width,
+          size.height,
+        );
         debugPrint(
             "restore lpos: ${size.width}/${size.height}, offset:${offset?.dx}/${offset?.dy}");
         if (offset == null) {
@@ -1654,7 +1753,7 @@ bool handleUriLink({List<String>? cmdArgs, Uri? uri, String? uriString}) {
         Future.delayed(Duration.zero, () {
           rustDeskWinManager.newRemoteDesktop(id!,
               password: password,
-              switch_uuid: switchUuid,
+              switchUuid: switchUuid,
               forceRelay: forceRelay);
         });
         break;
@@ -1719,11 +1818,13 @@ List<String>? urlLinkToCmdArgs(Uri uri) {
   return null;
 }
 
-connectMainDesktop(String id,
-    {required bool isFileTransfer,
-    required bool isTcpTunneling,
-    required bool isRDP,
-    bool? forceRelay}) async {
+connectMainDesktop(
+  String id, {
+  required bool isFileTransfer,
+  required bool isTcpTunneling,
+  required bool isRDP,
+  bool? forceRelay,
+}) async {
   if (isFileTransfer) {
     await rustDeskWinManager.newFileTransfer(id, forceRelay: forceRelay);
   } else if (isTcpTunneling || isRDP) {
@@ -1737,11 +1838,22 @@ connectMainDesktop(String id,
 /// If [isFileTransfer], starts a session only for file transfer.
 /// If [isTcpTunneling], starts a session only for tcp tunneling.
 /// If [isRDP], starts a session only for rdp.
-connect(BuildContext context, String id,
-    {bool isFileTransfer = false,
-    bool isTcpTunneling = false,
-    bool isRDP = false}) async {
+connect(
+  BuildContext context,
+  String id, {
+  bool isFileTransfer = false,
+  bool isTcpTunneling = false,
+  bool isRDP = false,
+}) async {
   if (id == '') return;
+  if (!isDesktop || desktopType == DesktopType.main) {
+    try {
+      if (Get.isRegistered<IDTextEditingController>()) {
+        final idController = Get.find<IDTextEditingController>();
+        idController.text = formatID(id);
+      }
+    } catch (_) {}
+  }
   id = id.replaceAll(' ', '');
   final oldId = id;
   id = await bind.mainHandleRelayId(id: id);
@@ -1751,18 +1863,20 @@ connect(BuildContext context, String id,
 
   if (isDesktop) {
     if (desktopType == DesktopType.main) {
-      await connectMainDesktop(id,
-          isFileTransfer: isFileTransfer,
-          isTcpTunneling: isTcpTunneling,
-          isRDP: isRDP,
-          forceRelay: forceRelay);
+      await connectMainDesktop(
+        id,
+        isFileTransfer: isFileTransfer,
+        isTcpTunneling: isTcpTunneling,
+        isRDP: isRDP,
+        forceRelay: forceRelay,
+      );
     } else {
       await rustDeskWinManager.call(WindowType.Main, kWindowConnect, {
         'id': id,
         'isFileTransfer': isFileTransfer,
         'isTcpTunneling': isTcpTunneling,
         'isRDP': isRDP,
-        "forceRelay": forceRelay,
+        'forceRelay': forceRelay,
       });
     }
   } else {
@@ -1851,10 +1965,14 @@ Future<void> onActiveWindowChanged() async {
   if (rustDeskWinManager.getActiveWindows().isEmpty) {
     // close all sub windows
     try {
-      await Future.wait([
-        saveWindowPosition(WindowType.Main),
-        rustDeskWinManager.closeAllSubWindows()
-      ]);
+      if (Platform.isLinux) {
+        await Future.wait([
+          saveWindowPosition(WindowType.Main),
+          rustDeskWinManager.closeAllSubWindows()
+        ]);
+      } else {
+        await rustDeskWinManager.closeAllSubWindows();
+      }
     } catch (err) {
       debugPrintStack(label: "$err");
     } finally {
@@ -2222,4 +2340,11 @@ Widget unreadTopRightBuilder(RxInt? count, {Widget? icon}) {
           child: unreadMessageCountBuilder(count, size: 12, fontSize: 8))
     ],
   );
+}
+
+String toCapitalized(String s) {
+  if (s.isEmpty) {
+    return s;
+  }
+  return s.substring(0, 1).toUpperCase() + s.substring(1);
 }
