@@ -528,5 +528,15 @@ pub static ref T: std::collections::HashMap<&'static str, &'static str> =
         ("Move tab to new window", ""),
         ("Can not be empty", ""),
         ("Already exists", ""),
+        ("Change Password", ""),
+        ("Refresh Password", ""),
+        ("ID", ""),
+        ("Grid View", ""),
+        ("List View", ""),
+        ("Select", ""),
+        ("Toggle Tags", ""),
+        ("pull_ab_failed_tip", ""),
+        ("push_ab_failed_tip", ""),
+        ("synced_peer_readded_tip", ""),
     ].iter().cloned().collect();
 }

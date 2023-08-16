@@ -175,7 +175,6 @@ pub struct Connection {
     tx_input: std_mpsc::Sender<MessageInput>,
     // handle input messages
     video_ack_required: bool,
-    peer_info: (String, String),
     server_audit_conn: String,
     server_audit_file: String,
     lr: LoginRequest,
@@ -306,7 +305,6 @@ impl Connection {
             disable_keyboard: false,
             tx_input,
             video_ack_required: false,
-            peer_info: Default::default(),
             server_audit_conn: "".to_owned(),
             server_audit_file: "".to_owned(),
             lr: Default::default(),
@@ -955,7 +953,9 @@ impl Connection {
         } else {
             0
         };
-        self.post_conn_audit(json!({"peer": self.peer_info, "type": conn_type}));
+        self.post_conn_audit(
+            json!({"peer": ((&self.lr.my_id, &self.lr.my_name)), "type": conn_type}),
+        );
         #[allow(unused_mut)]
         let mut username = crate::platform::get_active_username();
         let mut res = LoginResponse::new();
@@ -1051,13 +1051,15 @@ impl Connection {
             ..Default::default()
         })
         .into();
+        // `try_reset_current_display` is needed because `get_displays` may change the current display,
+        // which may cause the mismatch of current display and the current display name.
         #[cfg(not(any(target_os = "android", target_os = "ios")))]
         video_service::try_reset_current_display();
         #[cfg(not(any(target_os = "android", target_os = "ios")))]
         {
             pi.resolutions = Some(SupportedResolutions {
-                resolutions: video_service::get_current_display_name()
-                    .map(|name| crate::platform::resolutions(&name))
+                resolutions: video_service::get_current_display()
+                    .map(|(_, _, d)| crate::platform::resolutions(&d.name()))
                     .unwrap_or(vec![]),
                 ..Default::default()
             })
@@ -1140,7 +1142,6 @@ impl Connection {
     }
 
     fn try_start_cm(&mut self, peer_id: String, name: String, authorized: bool) {
-        self.peer_info = (peer_id.clone(), name.clone());
         self.send_to_cm(ipc::Data::Login {
             id: self.inner.id(),
             is_file_transfer: self.file_transfer.is_some(),
@@ -1948,7 +1949,8 @@ impl Connection {
     #[cfg(not(any(target_os = "android", target_os = "ios")))]
     fn change_resolution(&mut self, r: &Resolution) {
         if self.keyboard {
-            if let Ok(name) = video_service::get_current_display_name() {
+            if let Ok((_, _, display)) = video_service::get_current_display() {
+                let name = display.name();
                 #[cfg(all(windows, feature = "virtual_display_driver"))]
                 if let Some(_ok) =
                     crate::virtual_display_manager::change_resolution_if_is_virtual_display(
@@ -1959,6 +1961,11 @@ impl Connection {
                 {
                     return;
                 }
+                video_service::set_last_changed_resolution(
+                    &name,
+                    (display.width() as _, display.height() as _),
+                    (r.width, r.height),
+                );
                 if let Err(e) =
                     crate::platform::change_resolution(&name, r.width as _, r.height as _)
                 {

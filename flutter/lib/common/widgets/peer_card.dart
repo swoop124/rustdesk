@@ -1,9 +1,11 @@
 import 'dart:io';
 
+import 'package:bot_toast/bot_toast.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_hbb/common/widgets/dialog.dart';
 import 'package:flutter_hbb/consts.dart';
+import 'package:flutter_hbb/models/ab_model.dart';
 import 'package:flutter_hbb/models/peer_tab_model.dart';
 import 'package:get/get.dart';
 import 'package:provider/provider.dart';
@@ -14,6 +16,7 @@ import '../../models/peer_model.dart';
 import '../../models/platform_model.dart';
 import '../../desktop/widgets/material_mod_popup_menu.dart' as mod_menu;
 import '../../desktop/widgets/popup_menu.dart';
+import 'dart:math' as math;
 
 typedef PopupMenuEntryBuilder = Future<List<mod_menu.PopupMenuEntry<String>>>
     Function(BuildContext);
@@ -158,8 +161,7 @@ class _PeerCardState extends State<_PeerCard>
     final greyStyle = TextStyle(
         fontSize: 11,
         color: Theme.of(context).textTheme.titleLarge?.color?.withOpacity(0.6));
-    final alias = bind.mainGetPeerOptionSync(id: peer.id, key: 'alias');
-    return Obx(
+    final child = Obx(
       () => Container(
         foregroundDecoration: deco.value,
         child: Row(
@@ -195,11 +197,13 @@ class _PeerCardState extends State<_PeerCard>
                             getOnline(8, peer.online),
                             Expanded(
                                 child: Text(
-                              alias.isEmpty ? formatID(peer.id) : alias,
+                              peer.alias.isEmpty
+                                  ? formatID(peer.id)
+                                  : peer.alias,
                               overflow: TextOverflow.ellipsis,
                               style: Theme.of(context).textTheme.titleSmall,
                             )),
-                          ]).marginOnly(bottom: 2),
+                          ]).marginOnly(bottom: 0, top: 2),
                           Align(
                             alignment: Alignment.centerLeft,
                             child: Text(
@@ -221,13 +225,30 @@ class _PeerCardState extends State<_PeerCard>
         ),
       ),
     );
+    final colors = _frontN(peer.tags, 25).map((e) => str2color2(e)).toList();
+    return Tooltip(
+      message: peer.tags.isNotEmpty
+          ? '${translate('Tags')}: ${peer.tags.join(', ')}'
+          : '',
+      child: Stack(children: [
+        child,
+        if (colors.isNotEmpty)
+          Positioned(
+            top: 2,
+            right: 10,
+            child: CustomPaint(
+              painter: TagPainter(radius: 3, colors: colors),
+            ),
+          )
+      ]),
+    );
   }
 
   Widget _buildPeerCard(
       BuildContext context, Peer peer, Rx<BoxDecoration?> deco) {
     final name =
         '${peer.username}${peer.username.isNotEmpty && peer.hostname.isNotEmpty ? '@' : ''}${peer.hostname}';
-    return Card(
+    final child = Card(
       color: Colors.transparent,
       elevation: 0,
       margin: EdgeInsets.zero,
@@ -253,7 +274,7 @@ class _PeerCardState extends State<_PeerCard>
                                 padding: const EdgeInsets.all(6),
                                 child:
                                     getPlatformImage(peer.platform, size: 60),
-                              ),
+                              ).marginOnly(top: 4),
                               Row(
                                 children: [
                                   Expanded(
@@ -304,6 +325,32 @@ class _PeerCardState extends State<_PeerCard>
         ),
       ),
     );
+
+    final colors = _frontN(peer.tags, 25).map((e) => str2color2(e)).toList();
+    return Tooltip(
+      message: peer.tags.isNotEmpty
+          ? '${translate('Tags')}: ${peer.tags.join(', ')}'
+          : '',
+      child: Stack(children: [
+        child,
+        if (colors.isNotEmpty)
+          Positioned(
+            top: 4,
+            right: 12,
+            child: CustomPaint(
+              painter: TagPainter(radius: 4, colors: colors),
+            ),
+          )
+      ]),
+    );
+  }
+
+  List _frontN<T>(List list, int n) {
+    if (list.length <= n) {
+      return list;
+    } else {
+      return list.sublist(0, n);
+    }
   }
 
   Widget checkBoxOrActionMoreMobile(Peer peer) {
@@ -537,6 +584,7 @@ abstract class BasePeerCard extends StatelessWidget {
       ),
       proc: () {
         bind.mainCreateShortcut(id: id);
+        showToast(translate('Successful'));
       },
       padding: menuPadding,
       dismissOnClicked: true,
@@ -552,6 +600,7 @@ abstract class BasePeerCard extends StatelessWidget {
       setter: (bool v) async {
         await bind.mainSetPeerOption(
             id: id, key: key, value: bool2option(key, v));
+        showToast(translate('Successful'));
       },
       padding: menuPadding,
       dismissOnClicked: true,
@@ -588,6 +637,7 @@ abstract class BasePeerCard extends StatelessWidget {
             id: id,
             key: kOptionForceAlwaysRelay,
             value: bool2option(kOptionForceAlwaysRelay, v));
+        showToast(translate('Successful'));
       },
       padding: menuPadding,
       dismissOnClicked: true,
@@ -607,8 +657,14 @@ abstract class BasePeerCard extends StatelessWidget {
             oldName: oldName,
             onSubmit: (String newName) async {
               if (newName != oldName) {
-                await bind.mainSetPeerAlias(id: id, alias: newName);
-                _update();
+                if (tab == PeerTabIndex.ab) {
+                  gFFI.abModel.changeAlias(id: id, alias: newName);
+                  gFFI.abModel.pushAb();
+                } else {
+                  await bind.mainSetPeerAlias(id: id, alias: newName);
+                  showToast(translate('Successful'));
+                  _update();
+                }
               }
             });
       },
@@ -656,10 +712,24 @@ abstract class BasePeerCard extends StatelessWidget {
               break;
             case PeerTabIndex.ab:
               gFFI.abModel.deletePeer(id);
-              await gFFI.abModel.pushAb();
+              final future = gFFI.abModel.pushAb();
+              if (shouldSyncAb() && await bind.mainPeerExists(id: peer.id)) {
+                Future.delayed(Duration.zero, () async {
+                  final succ = await future;
+                  if (succ) {
+                    await Future.delayed(Duration(seconds: 2)); // success msg
+                    BotToast.showText(
+                        contentColor: Colors.lightBlue,
+                        text: translate('synced_peer_readded_tip'));
+                  }
+                });
+              }
               break;
             case PeerTabIndex.group:
               break;
+          }
+          if (tab != PeerTabIndex.ab) {
+            showToast(translate('Successful'));
           }
         }
 
@@ -680,6 +750,7 @@ abstract class BasePeerCard extends StatelessWidget {
       ),
       proc: () {
         bind.mainForgetPassword(id: id);
+        showToast(translate('Successful'));
       },
       padding: menuPadding,
       dismissOnClicked: true,
@@ -712,6 +783,7 @@ abstract class BasePeerCard extends StatelessWidget {
             favs.add(id);
             await bind.mainStoreFav(favs: favs);
           }
+          showToast(translate('Successful'));
         }();
       },
       padding: menuPadding,
@@ -746,6 +818,7 @@ abstract class BasePeerCard extends StatelessWidget {
             await bind.mainStoreFav(favs: favs);
             await reloadFunc();
           }
+          showToast(translate('Successful'));
         }();
       },
       padding: menuPadding,
@@ -767,7 +840,7 @@ abstract class BasePeerCard extends StatelessWidget {
           }
           if (!gFFI.abModel.idContainBy(peer.id)) {
             gFFI.abModel.addPeer(peer);
-            await gFFI.abModel.pushAb();
+            gFFI.abModel.pushAb();
           }
         }();
       },
@@ -987,7 +1060,7 @@ class AddressBookPeerCard extends BasePeerCard {
 
   @protected
   @override
-  void _update() => gFFI.abModel.pullAb();
+  void _update() => gFFI.abModel.pullAb(quiet: true);
 
   @protected
   MenuEntryBase<String> _editTagAction(String id) {
@@ -999,13 +1072,18 @@ class AddressBookPeerCard extends BasePeerCard {
       proc: () {
         editAbTagDialog(gFFI.abModel.getPeerTags(id), (selectedTag) async {
           gFFI.abModel.changeTagForPeer(id, selectedTag);
-          await gFFI.abModel.pushAb();
+          gFFI.abModel.pushAb();
         });
       },
       padding: super.menuPadding,
       dismissOnClicked: true,
     );
   }
+
+  @protected
+  @override
+  Future<String> _getAlias(String id) async =>
+      gFFI.abModel.find(id)?.alias ?? '';
 }
 
 class MyGroupPeerCard extends BasePeerCard {
@@ -1066,6 +1144,7 @@ void _rdpDialog(String id) async {
           id: id, key: 'rdp_username', value: username);
       await bind.mainSetPeerOption(
           id: id, key: 'rdp_password', value: password);
+      showToast(translate('Successful'));
       close();
     }
 
@@ -1192,4 +1271,42 @@ Widget build_more(BuildContext context, {bool invert = false}) {
                       .titleLarge
                       ?.color
                       ?.withOpacity(0.5)))));
+}
+
+class TagPainter extends CustomPainter {
+  final double radius;
+  late final List<Color> colors;
+
+  TagPainter({required this.radius, required List<Color> colors}) {
+    this.colors = colors.reversed.toList();
+  }
+
+  @override
+  void paint(Canvas canvas, Size size) {
+    double x = 0;
+    double y = radius;
+    for (int i = 0; i < colors.length; i++) {
+      Paint paint = Paint();
+      paint.color = colors[i];
+      x -= radius + 1;
+      if (i == colors.length - 1) {
+        canvas.drawCircle(Offset(x, y), radius, paint);
+      } else {
+        Path path = Path();
+        path.addArc(Rect.fromCircle(center: Offset(x, y), radius: radius),
+            math.pi * 4 / 3, math.pi * 4 / 3);
+        path.addArc(
+            Rect.fromCircle(center: Offset(x - radius, y), radius: radius),
+            math.pi * 5 / 3,
+            math.pi * 2 / 3);
+        path.fillType = PathFillType.evenOdd;
+        canvas.drawPath(path, paint);
+      }
+    }
+  }
+
+  @override
+  bool shouldRepaint(covariant CustomPainter oldDelegate) {
+    return true;
+  }
 }
