@@ -7,10 +7,10 @@ import 'package:flutter_hbb/models/ab_model.dart';
 import 'package:flutter_hbb/models/platform_model.dart';
 import '../../desktop/widgets/material_mod_popup_menu.dart' as mod_menu;
 import 'package:get/get.dart';
+import 'package:flex_color_picker/flex_color_picker.dart';
 
 import '../../common.dart';
 import 'dialog.dart';
-import 'loading_dot_widget.dart';
 import 'login.dart';
 
 final hideAbTagsPanel = false.obs;
@@ -47,8 +47,8 @@ class _AddressBookState extends State<AddressBook> {
           }
           return Column(
             children: [
-              _buildNotEmptyLoading(),
-              _buildRetryProgress(),
+              // NOT use Offstage to wrap LinearProgressIndicator
+              if (gFFI.abModel.retrying.value) LinearProgressIndicator(),
               _buildErrorBanner(
                   err: gFFI.abModel.pullError,
                   retry: null,
@@ -118,29 +118,6 @@ class _AddressBookState extends State<AddressBook> {
               ],
             ),
           )).marginOnly(bottom: 14),
-        ));
-  }
-
-  Widget _buildNotEmptyLoading() {
-    double size = 15;
-    return Obx(() => Offstage(
-          offstage: !(gFFI.abModel.abLoading.value && !gFFI.abModel.emtpy),
-          child: Row(
-            mainAxisAlignment: MainAxisAlignment.center,
-            children: [
-              SizedBox(
-                      height: size,
-                      child: Center(child: LoadingDotWidget(size: size)))
-                  .marginSymmetric(vertical: 10)
-            ],
-          ),
-        ));
-  }
-
-  Widget _buildRetryProgress() {
-    return Obx(() => Offstage(
-          offstage: !gFFI.abModel.retrying.value,
-          child: LinearProgressIndicator(),
         ));
   }
 
@@ -422,8 +399,8 @@ class _AddressBookState extends State<AddressBook> {
             const SizedBox(
               height: 4.0,
             ),
-            Offstage(
-                offstage: !isInProgress, child: const LinearProgressIndicator())
+            // NOT use Offstage to wrap LinearProgressIndicator
+            if (isInProgress) const LinearProgressIndicator(),
           ],
         ),
         actions: [
@@ -488,8 +465,8 @@ class _AddressBookState extends State<AddressBook> {
             const SizedBox(
               height: 4.0,
             ),
-            Offstage(
-                offstage: !isInProgress, child: const LinearProgressIndicator())
+            // NOT use Offstage to wrap LinearProgressIndicator
+            if (isInProgress) const LinearProgressIndicator(),
           ],
         ),
         actions: [
@@ -537,7 +514,7 @@ class AddressBookTag extends StatelessWidget {
       child: Obx(() => Container(
             decoration: BoxDecoration(
                 color: tags.contains(name)
-                    ? str2color2(name, 0xFF)
+                    ? gFFI.abModel.getTagColor(name)
                     : Theme.of(context).colorScheme.background,
                 borderRadius: BorderRadius.circular(4)),
             margin: const EdgeInsets.symmetric(horizontal: 4.0, vertical: 4.0),
@@ -552,7 +529,7 @@ class AddressBookTag extends StatelessWidget {
                         shape: BoxShape.circle,
                         color: tags.contains(name)
                             ? Colors.white
-                            : str2color2(name)),
+                            : gFFI.abModel.getTagColor(name)),
                   ).marginOnly(right: radius / 2),
                   Expanded(
                     child: Text(name,
@@ -591,6 +568,30 @@ class AddressBookTag extends StatelessWidget {
             onCancel: () {
               Future.delayed(Duration.zero, () => Get.back());
             });
+      }),
+      getEntry(translate(translate('Change Color')), () async {
+        final model = gFFI.abModel;
+        Color oldColor = model.getTagColor(name);
+        Color newColor = await showColorPickerDialog(
+          context,
+          oldColor,
+          pickersEnabled: {
+            ColorPickerType.accent: false,
+            ColorPickerType.wheel: true,
+          },
+          pickerTypeLabels: {
+            ColorPickerType.primary: translate("Primary Color"),
+            ColorPickerType.wheel: translate("HSV Color"),
+          },
+          actionButtons: ColorPickerActionButtons(
+              dialogOkButtonLabel: translate("OK"),
+              dialogCancelButtonLabel: translate("Cancel")),
+          showColorCode: true,
+        );
+        if (oldColor != newColor) {
+          model.setTagColor(name, newColor);
+          model.pushAb();
+        }
       }),
       getEntry(translate("Delete"), () {
         gFFI.abModel.deleteTag(name);
