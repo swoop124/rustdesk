@@ -11,6 +11,7 @@ import 'package:flutter_hbb/consts.dart';
 import 'package:flutter_hbb/generated_bridge.dart';
 import 'package:flutter_hbb/models/ab_model.dart';
 import 'package:flutter_hbb/models/chat_model.dart';
+import 'package:flutter_hbb/models/cm_file_model.dart';
 import 'package:flutter_hbb/models/file_model.dart';
 import 'package:flutter_hbb/models/group_model.dart';
 import 'package:flutter_hbb/models/peer_tab_model.dart';
@@ -317,6 +318,10 @@ class FfiModel with ChangeNotifier {
             }
           }
         }
+      } else if (name == "cm_file_transfer_log") {
+        if (isDesktop) {
+          gFFI.cmFileModel.onFileTransferLog(evt['log']);
+        }
       } else {
         debugPrint('Unknown event name: $name');
       }
@@ -554,23 +559,13 @@ class FfiModel with ChangeNotifier {
     }
 
     final connType = parent.target?.connType;
-
     if (isPeerAndroid) {
       _touchMode = true;
-      if (connType == ConnType.defaultConn &&
-          parent.target != null &&
-          parent.target!.ffiModel.permissions['keyboard'] != false) {
-        Timer(
-            const Duration(milliseconds: 100),
-            () => parent.target!.dialogManager
-                .showMobileActionsOverlay(ffi: parent.target!));
-      }
     } else {
       _touchMode = await bind.sessionGetOption(
               sessionId: sessionId, arg: 'touch-mode') !=
           '';
     }
-
     if (connType == ConnType.fileTransfer) {
       parent.target?.fileModel.onReady();
     } else if (connType == ConnType.defaultConn) {
@@ -614,6 +609,19 @@ class FfiModel with ChangeNotifier {
     stateGlobal.resetLastResolutionGroupValues(peerId);
 
     notifyListeners();
+  }
+
+  tryShowAndroidActionsOverlay({int delayMSecs = 10}) {
+    if (isPeerAndroid) {
+      if (parent.target?.connType == ConnType.defaultConn &&
+          parent.target != null &&
+          parent.target!.ffiModel.permissions['keyboard'] != false) {
+        Timer(
+            Duration(milliseconds: delayMSecs),
+            () => parent.target!.dialogManager
+                .showMobileActionsOverlay(ffi: parent.target!));
+      }
+    }
   }
 
   handleResolutions(String id, dynamic resolutions) {
@@ -1696,6 +1704,7 @@ class FFI {
   late final RecordingModel recordingModel; // session
   late final InputModel inputModel; // session
   late final ElevationModel elevationModel; // session
+  late final CmFileModel cmFileModel; // cm
 
   FFI(SessionID? sId) {
     sessionId = sId ?? (isDesktop ? Uuid().v4obj() : _constSessionId);
@@ -1714,6 +1723,15 @@ class FFI {
     recordingModel = RecordingModel(WeakReference(this));
     inputModel = InputModel(WeakReference(this));
     elevationModel = ElevationModel(WeakReference(this));
+    cmFileModel = CmFileModel(WeakReference(this));
+  }
+
+  /// Mobile reuse FFI
+  void mobileReset() {
+    ffiModel.waitForFirstImage.value = true;
+    ffiModel.waitForImageDialogShow.value = true;
+    ffiModel.waitForImageTimer?.cancel();
+    ffiModel.waitForImageTimer = null;
   }
 
   /// Start with the given [id]. Only transfer file if [isFileTransfer], only port forward if [isPortForward].
@@ -1727,6 +1745,7 @@ class FFI {
       int? tabWindowId}) {
     closed = false;
     auditNote = '';
+    if (isMobile) mobileReset();
     assert(!(isFileTransfer && isPortForward), 'more than one connect type');
     if (isFileTransfer) {
       connType = ConnType.fileTransfer;
@@ -1806,7 +1825,7 @@ class FFI {
           } else {
             // Fetch the image buffer from rust codes.
             final sz = platformFFI.getRgbaSize(sessionId);
-            if (sz == null || sz == 0) {
+            if (sz == 0) {
               return;
             }
             final rgba = platformFFI.getRgba(sessionId, sz);
