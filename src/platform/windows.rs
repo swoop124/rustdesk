@@ -14,6 +14,7 @@ use hbb_common::{
     message_proto::Resolution,
     sleep, timeout, tokio,
 };
+use std::process::{Command, Stdio};
 use std::{
     collections::HashMap,
     ffi::OsString,
@@ -26,6 +27,7 @@ use std::{
     sync::{atomic::Ordering, Arc, Mutex},
     time::{Duration, Instant},
 };
+use wallpaper;
 use winapi::{
     ctypes::c_void,
     shared::{minwindef::*, ntdef::NULL, windef::*, winerror::*},
@@ -1269,9 +1271,15 @@ pub fn toggle_blank_screen(v: bool) {
     }
 }
 
-pub fn block_input(v: bool) -> bool {
+pub fn block_input(v: bool) -> (bool, String) {
     let v = if v { TRUE } else { FALSE };
-    unsafe { BlockInput(v) == TRUE }
+    unsafe {
+        if BlockInput(v) == TRUE {
+            (true, "".to_owned())
+        } else {
+            (false, format!("Error code: {}", GetLastError()))
+        }
+    }
 }
 
 pub fn add_recent_document(path: &str) {
@@ -1581,29 +1589,6 @@ pub fn is_elevated(process_id: Option<DWORD>) -> ResultType<bool> {
     }
 }
 
-#[inline]
-fn filter_foreground_window(process_id: DWORD) -> ResultType<bool> {
-    if let Ok(output) = std::process::Command::new("tasklist")
-        .args(vec![
-            "/SVC",
-            "/NH",
-            "/FI",
-            &format!("PID eq {}", process_id),
-        ])
-        .creation_flags(CREATE_NO_WINDOW)
-        .output()
-    {
-        let s = String::from_utf8_lossy(&output.stdout)
-            .to_string()
-            .to_lowercase();
-        Ok(["Taskmgr", "mmc", "regedit"]
-            .iter()
-            .any(|name| s.contains(&name.to_string().to_lowercase())))
-    } else {
-        bail!("run tasklist failed");
-    }
-}
-
 pub fn is_foreground_window_elevated() -> ResultType<bool> {
     unsafe {
         let mut process_id: DWORD = 0;
@@ -1611,12 +1596,7 @@ pub fn is_foreground_window_elevated() -> ResultType<bool> {
         if process_id == 0 {
             bail!("Failed to get processId, errno {}", GetLastError())
         }
-        let elevated = is_elevated(Some(process_id))?;
-        if elevated {
-            filter_foreground_window(process_id)
-        } else {
-            Ok(false)
-        }
+        is_elevated(Some(process_id))
     }
 }
 
@@ -2356,4 +2336,103 @@ fn get_license() -> Option<License> {
         return None;
     }
     Some(lic)
+}
+
+fn get_sid_of_user(username: &str) -> ResultType<String> {
+    let mut output = Command::new("wmic")
+        .args(&[
+            "useraccount",
+            "where",
+            &format!("name='{}'", username),
+            "get",
+            "sid",
+            "/value",
+        ])
+        .creation_flags(CREATE_NO_WINDOW)
+        .stdout(Stdio::piped())
+        .spawn()?
+        .stdout
+        .ok_or_else(|| io::Error::new(io::ErrorKind::Other, "Failed to open stdout"))?;
+    let mut result = String::new();
+    output.read_to_string(&mut result)?;
+    let sid_start_index = result
+        .find('=')
+        .map(|i| i + 1)
+        .ok_or(anyhow!("bad output format"))?;
+    if sid_start_index > 0 && sid_start_index < result.len() + 1 {
+        Ok(result[sid_start_index..].trim().to_string())
+    } else {
+        bail!("bad output format");
+    }
+}
+
+pub struct WallPaperRemover {
+    old_path: String,
+}
+
+impl WallPaperRemover {
+    pub fn new() -> ResultType<Self> {
+        let start = std::time::Instant::now();
+        if !Self::need_remove() {
+            bail!("already solid color");
+        }
+        let old_path = match Self::get_recent_wallpaper() {
+            Ok(old_path) => old_path,
+            Err(e) => {
+                log::info!("Failed to get recent wallpaper:{:?}, use fallback", e);
+                wallpaper::get().map_err(|e| anyhow!(e.to_string()))?
+            }
+        };
+        Self::set_wallpaper(None)?;
+        log::info!(
+            "created wallpaper remover,  old_path:{:?},  elapsed:{:?}",
+            old_path,
+            start.elapsed(),
+        );
+        Ok(Self { old_path })
+    }
+
+    pub fn support() -> bool {
+        wallpaper::get().is_ok() || !Self::get_recent_wallpaper().unwrap_or_default().is_empty()
+    }
+
+    fn get_recent_wallpaper() -> ResultType<String> {
+        // SystemParametersInfoW may return %appdata%\Microsoft\Windows\Themes\TranscodedWallpaper, not real path and may not real cache
+        // https://www.makeuseof.com/find-desktop-wallpapers-file-location-windows-11/
+        // https://superuser.com/questions/1218413/write-to-current-users-registry-through-a-different-admin-account
+        let (hkcu, sid) = if is_root() {
+            let username = get_active_username();
+            let sid = get_sid_of_user(&username)?;
+            log::info!("username:{username}, sid:{sid}");
+            (RegKey::predef(HKEY_USERS), format!("{}\\", sid))
+        } else {
+            (RegKey::predef(HKEY_CURRENT_USER), "".to_string())
+        };
+        let explorer_key = hkcu.open_subkey_with_flags(
+            &format!(
+                "{}Software\\Microsoft\\Windows\\CurrentVersion\\Explorer\\Wallpapers",
+                sid
+            ),
+            KEY_READ,
+        )?;
+        Ok(explorer_key.get_value("BackgroundHistoryPath0")?)
+    }
+
+    fn need_remove() -> bool {
+        if let Ok(wallpaper) = wallpaper::get() {
+            return !wallpaper.is_empty();
+        }
+        false
+    }
+
+    fn set_wallpaper(path: Option<String>) -> ResultType<()> {
+        wallpaper::set_from_path(&path.unwrap_or_default()).map_err(|e| anyhow!(e.to_string()))
+    }
+}
+
+impl Drop for WallPaperRemover {
+    fn drop(&mut self) {
+        // If the old background is a slideshow, it will be converted into an image. AnyDesk does the same.
+        allow_err!(Self::set_wallpaper(Some(self.old_path.clone())));
+    }
 }

@@ -8,8 +8,8 @@ import 'package:desktop_multi_window/desktop_multi_window.dart';
 import 'package:flutter/gestures.dart';
 import 'package:flutter/material.dart' hide TabBarTheme;
 import 'package:flutter_hbb/common.dart';
-import 'package:flutter_hbb/common/shared_state.dart';
 import 'package:flutter_hbb/consts.dart';
+import 'package:flutter_hbb/desktop/pages/remote_page.dart';
 import 'package:flutter_hbb/main.dart';
 import 'package:flutter_hbb/models/platform_model.dart';
 import 'package:flutter_hbb/models/state_model.dart';
@@ -177,6 +177,19 @@ class DesktopTabController {
       jumpTo(state.value.tabs.indexWhere((tab) => tab.key == key),
           callOnSelected: callOnSelected);
 
+  bool jumpToByKeyAndDisplay(String key, int display) {
+    for (int i = 0; i < state.value.tabs.length; i++) {
+      final tab = state.value.tabs[i];
+      if (tab.key == key) {
+        final ffi = (tab.page as RemotePage).ffi;
+        if (ffi.ffiModel.pi.currentDisplay == display) {
+          return jumpTo(i, callOnSelected: true);
+        }
+      }
+    }
+    return false;
+  }
+
   void closeBy(String? key) {
     if (!isDesktop) return;
     assert(onRemoved != null);
@@ -267,13 +280,9 @@ class DesktopTab extends StatelessWidget {
         tabType == DesktopTabType.install;
   }
 
-  static RxString labelGetterAlias(String peerId) {
-    final opt = 'alias';
-    PeerStringOption.init(peerId, opt, () {
-      final alias = bind.mainGetPeerOptionSync(id: peerId, key: opt);
-      return alias.isEmpty ? peerId : alias;
-    });
-    return PeerStringOption.find(peerId, opt);
+  static RxString tablabelGetter(String peerId) {
+    final alias = bind.mainGetPeerOptionSync(id: peerId, key: 'alias');
+    return RxString(getDesktopTabLabel(peerId, alias));
   }
 
   @override
@@ -921,14 +930,17 @@ class _TabState extends State<_Tab> with RestorationMixin {
     final labelWidget = Obx(() {
       return ConstrainedBox(
           constraints: BoxConstraints(maxWidth: widget.maxLabelWidth ?? 200),
-          child: Text(
-            translate(widget.label.value),
-            textAlign: TextAlign.center,
-            style: TextStyle(
-                color: isSelected
-                    ? MyTheme.tabbar(context).selectedTextColor
-                    : MyTheme.tabbar(context).unSelectedTextColor),
-            overflow: TextOverflow.ellipsis,
+          child: Tooltip(
+            message: translate(widget.label.value),
+            child: Text(
+              translate(widget.label.value),
+              textAlign: TextAlign.center,
+              style: TextStyle(
+                  color: isSelected
+                      ? MyTheme.tabbar(context).selectedTextColor
+                      : MyTheme.tabbar(context).unSelectedTextColor),
+              overflow: TextOverflow.ellipsis,
+            ),
           ));
     });
 

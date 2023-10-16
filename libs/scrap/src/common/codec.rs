@@ -23,8 +23,8 @@ use hbb_common::{
     config::PeerConfig,
     log,
     message_proto::{
-        supported_decoding::PreferCodec, video_frame, EncodedVideoFrames, Message,
-        SupportedDecoding, SupportedEncoding,
+        supported_decoding::PreferCodec, video_frame, EncodedVideoFrames,
+        SupportedDecoding, SupportedEncoding, VideoFrame,
     },
     sysinfo::{System, SystemExt},
     tokio::time::Instant,
@@ -60,7 +60,7 @@ pub trait EncoderApi {
     where
         Self: Sized;
 
-    fn encode_to_message(&mut self, frame: &[u8], ms: i64) -> ResultType<Message>;
+    fn encode_to_message(&mut self, frame: &[u8], ms: i64) -> ResultType<VideoFrame>;
 
     fn use_yuv(&self) -> bool;
 
@@ -195,6 +195,9 @@ impl Encoder {
 
         #[allow(unused_mut)]
         let mut auto_codec = CodecName::VP9;
+        if av1_useable {
+            auto_codec = CodecName::AV1;
+        }
         if vp8_useable && System::new_all().total_memory() <= 4 * 1024 * 1024 * 1024 {
             // 4 Gb
             auto_codec = CodecName::VP8
