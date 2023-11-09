@@ -131,7 +131,8 @@ impl InvokeUiSession for SciterHandler {
                 status.target_bitrate.map_or(Value::null(), |it| it.into()),
                 status
                     .codec_format
-                    .map_or(Value::null(), |it| it.to_string().into())
+                    .map_or(Value::null(), |it| it.to_string().into()),
+                status.chroma.map_or(Value::null(), |it| it.into())
             ),
         );
     }
@@ -243,6 +244,7 @@ impl InvokeUiSession for SciterHandler {
         pi_sciter.set_item("sas_enabled", pi.sas_enabled);
         pi_sciter.set_item("displays", Self::make_displays_array(&pi.displays));
         pi_sciter.set_item("current_display", pi.current_display);
+        pi_sciter.set_item("version", pi.version.clone());
         self.call("updatePi", &make_args!(pi_sciter));
     }
 
@@ -251,6 +253,10 @@ impl InvokeUiSession for SciterHandler {
             "updateDisplays",
             &make_args!(Self::make_displays_array(displays)),
         );
+    }
+
+    fn set_platform_additions(&self, _data: &str) {
+        // Ignore for sciter version.
     }
 
     fn on_connected(&self, conn_type: ConnType) {
@@ -469,14 +475,14 @@ impl sciter::EventHandler for SciterSession {
         fn restart_remote_device();
         fn request_voice_call();
         fn close_voice_call();
+        fn version_cmp(String, String);
     }
 }
 
 impl SciterSession {
     pub fn new(cmd: String, id: String, password: String, args: Vec<String>) -> Self {
         let force_relay = args.contains(&"--relay".to_string());
-        let session: Session<SciterHandler> = Session {
-            id: id.clone(),
+        let mut session: Session<SciterHandler> = Session {
             password: password.clone(),
             args,
             server_keyboard_enabled: Arc::new(RwLock::new(true)),
@@ -756,6 +762,10 @@ impl SciterSession {
         if let Err(err) = crate::run_me(args) {
             log::error!("Failed to spawn IP tunneling: {}", err);
         }
+    }
+
+    fn version_cmp(&self, v1: String, v2: String) -> i32 {
+        (hbb_common::get_version_number(&v1) - hbb_common::get_version_number(&v2)) as i32
     }
 }
 

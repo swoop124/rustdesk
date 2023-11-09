@@ -4,8 +4,11 @@ use scrap::{is_cursor_embedded, set_map_err, Capturer, Display, Frame, TraitCapt
 use std::io;
 use std::process::{Command, Output};
 
-use crate::client::{
-    SCRAP_OTHER_VERSION_OR_X11_REQUIRED, SCRAP_UBUNTU_HIGHER_REQUIRED, SCRAP_X11_REQUIRED,
+use crate::{
+    client::{
+        SCRAP_OTHER_VERSION_OR_X11_REQUIRED, SCRAP_UBUNTU_HIGHER_REQUIRED, SCRAP_X11_REQUIRED,
+    },
+    platform::linux::is_x11,
 };
 
 lazy_static::lazy_static! {
@@ -73,12 +76,6 @@ impl TraitCapturer for CapturerPtr {
     fn frame<'a>(&'a mut self, timeout: Duration) -> io::Result<Frame<'a>> {
         unsafe { (*self.0).frame(timeout) }
     }
-
-    fn set_use_yuv(&mut self, use_yuv: bool) {
-        unsafe {
-            (*self.0).set_use_yuv(use_yuv);
-        }
-    }
 }
 
 struct CapDisplayInfo {
@@ -96,7 +93,7 @@ pub(super) async fn ensure_inited() -> ResultType<()> {
 }
 
 pub(super) fn is_inited() -> Option<Message> {
-    if scrap::is_x11() {
+    if is_x11() {
         None
     } else {
         if *CAP_DISPLAY_INFO.read().unwrap() == 0 {
@@ -133,7 +130,7 @@ fn get_max_desktop_resolution() -> Option<String> {
 }
 
 pub(super) async fn check_init() -> ResultType<()> {
-    if !scrap::is_x11() {
+    if !is_x11() {
         let mut minx = 0;
         let mut maxx = 0;
         let mut miny = 0;
@@ -146,7 +143,8 @@ pub(super) async fn check_init() -> ResultType<()> {
                 let num = all.len();
                 let primary = super::display_service::get_primary_2(&all);
                 let current = primary;
-                let mut displays = super::display_service::to_display_info(&all);
+                super::display_service::check_update_displays(&all);
+                let mut displays = super::display_service::get_sync_displays();
                 for display in displays.iter_mut() {
                     display.cursor_embedded = is_cursor_embedded();
                 }
@@ -173,19 +171,23 @@ pub(super) async fn check_init() -> ResultType<()> {
                     Some(result) if !result.is_empty() => {
                         let resolution: Vec<&str> = result.split(" ").collect();
                         let w: i32 = resolution[0].parse().unwrap_or(origin.0 + width as i32);
-                        let h: i32 = resolution[2].trim_end_matches(",").parse().unwrap_or(origin.1 + height as i32);
+                        let h: i32 = resolution[2]
+                            .trim_end_matches(",")
+                            .parse()
+                            .unwrap_or(origin.1 + height as i32);
                         (w, h)
                     }
-                    _ => (origin.0 + width as i32, origin.1 + height as i32)
+                    _ => (origin.0 + width as i32, origin.1 + height as i32),
                 };
-            
+
                 minx = 0;
                 maxx = max_width;
                 miny = 0;
                 maxy = max_height;
 
                 let capturer = Box::into_raw(Box::new(
-                    Capturer::new(display, true).with_context(|| "Failed to create capturer")?,
+                    Capturer::new(display)
+                        .with_context(|| "Failed to create capturer")?,
                 ));
                 let capturer = CapturerPtr(capturer);
                 let cap_display_info = Box::into_raw(Box::new(CapDisplayInfo {
@@ -242,7 +244,7 @@ pub(super) fn get_primary() -> ResultType<usize> {
 }
 
 pub fn clear() {
-    if scrap::is_x11() {
+    if is_x11() {
         return;
     }
     let mut write_lock = CAP_DISPLAY_INFO.write().unwrap();
@@ -257,7 +259,7 @@ pub fn clear() {
 }
 
 pub(super) fn get_capturer() -> ResultType<super::video_service::CapturerInfo> {
-    if scrap::is_x11() {
+    if is_x11() {
         bail!("Do not call this function if not wayland");
     }
     let addr = *CAP_DISPLAY_INFO.read().unwrap();
@@ -267,9 +269,6 @@ pub(super) fn get_capturer() -> ResultType<super::video_service::CapturerInfo> {
             let cap_display_info = &*cap_display_info;
             let rect = cap_display_info.rects[cap_display_info.current];
             Ok(super::video_service::CapturerInfo {
-                name: cap_display_info.displays[cap_display_info.current]
-                    .name
-                    .clone(),
                 origin: rect.0,
                 width: rect.1,
                 height: rect.2,

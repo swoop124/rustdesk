@@ -329,19 +329,24 @@ class _DesktopHomePageState extends State<DesktopHomePage>
           "Click to download", () async {
         final Uri url = Uri.parse('https://rustdesk.com/download');
         await launchUrl(url);
-      },
-      closeButton: true);
+      }, closeButton: true);
     }
     if (systemError.isNotEmpty) {
       return buildInstallCard("", systemError, "", () {});
     }
     if (Platform.isWindows) {
       if (!bind.mainIsInstalled()) {
-        return buildInstallCard(
-            "", "install_tip", "Install", bind.mainGotoInstall);
+        return buildInstallCard("", "install_tip", "Install", () async {
+          await rustDeskWinManager.closeAllSubWindows();
+          bind.mainGotoInstall();
+        });
       } else if (bind.mainIsInstalledLowerVersion()) {
-        return buildInstallCard("Status", "Your installation is lower version.",
-            "Click to upgrade", bind.mainUpdateMe);
+        return buildInstallCard(
+            "Status", "Your installation is lower version.", "Click to upgrade",
+            () async {
+          await rustDeskWinManager.closeAllSubWindows();
+          bind.mainUpdateMe();
+        });
       }
     } else if (Platform.isMacOS) {
       if (!bind.mainIsCanScreenRecording(prompt: false)) {
@@ -379,16 +384,42 @@ class _DesktopHomePageState extends State<DesktopHomePage>
       //   });
       // }
     } else if (Platform.isLinux) {
+      final LinuxCards = <Widget>[];
+      if (bind.isSelinuxEnforcing()) {
+        // Check is SELinux enforcing, but show user a tip of is SELinux enabled for simple.
+        final keyShowSelinuxHelpTip = "show-selinux-help-tip";
+        if (bind.mainGetLocalOption(key: keyShowSelinuxHelpTip) != 'N') {
+          LinuxCards.add(buildInstallCard(
+            "Warning",
+            "selinux_tip",
+            "",
+            () async {},
+            marginTop: LinuxCards.isEmpty ? 20.0 : 5.0,
+            help: 'Help',
+            link:
+                'https://rustdesk.com/docs/en/client/linux/#permissions-issue',
+            closeButton: true,
+            closeOption: keyShowSelinuxHelpTip,
+          ));
+        }
+      }
       if (bind.mainCurrentIsWayland()) {
-        return buildInstallCard(
+        LinuxCards.add(buildInstallCard(
             "Warning", "wayland_experiment_tip", "", () async {},
+            marginTop: LinuxCards.isEmpty ? 20.0 : 5.0,
             help: 'Help',
-            link: 'https://rustdesk.com/docs/en/manual/linux/#x11-required');
+            link: 'https://rustdesk.com/docs/en/manual/linux/#x11-required'));
       } else if (bind.mainIsLoginWayland()) {
-        return buildInstallCard("Warning",
+        LinuxCards.add(buildInstallCard("Warning",
             "Login screen using Wayland is not supported", "", () async {},
+            marginTop: LinuxCards.isEmpty ? 20.0 : 5.0,
             help: 'Help',
-            link: 'https://rustdesk.com/docs/en/manual/linux/#login-screen');
+            link: 'https://rustdesk.com/docs/en/manual/linux/#login-screen'));
+      }
+      if (LinuxCards.isNotEmpty) {
+        return Column(
+          children: LinuxCards,
+        );
       }
     }
     return Container();
@@ -396,102 +427,115 @@ class _DesktopHomePageState extends State<DesktopHomePage>
 
   Widget buildInstallCard(String title, String content, String btnText,
       GestureTapCallback onPressed,
-      {String? help, String? link, bool? closeButton}) {
-
-    void closeCard() {
-      setState(() {
-        isCardClosed = true;
-      });
+      {double marginTop = 20.0,
+      String? help,
+      String? link,
+      bool? closeButton,
+      String? closeOption}) {
+    void closeCard() async {
+      if (closeOption != null) {
+        await bind.mainSetLocalOption(key: closeOption, value: 'N');
+        if (bind.mainGetLocalOption(key: closeOption) == 'N') {
+          setState(() {
+            isCardClosed = true;
+          });
+        }
+      } else {
+        setState(() {
+          isCardClosed = true;
+        });
+      }
     }
 
     return Stack(
       children: [
         Container(
-          margin: EdgeInsets.only(top: 20),
+          margin: EdgeInsets.only(top: marginTop),
           child: Container(
-            decoration: BoxDecoration(
-              gradient: LinearGradient(
-            begin: Alignment.centerLeft,
-            end: Alignment.centerRight,
-            colors: [
-              Color.fromARGB(255, 226, 66, 188),
-              Color.fromARGB(255, 244, 114, 124),
-            ],
-          )),
-          padding: EdgeInsets.all(20),
-          child: Column(
-              mainAxisAlignment: MainAxisAlignment.start,
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: (title.isNotEmpty
-                      ? <Widget>[
-                          Center(
-                              child: Text(
-                            translate(title),
-                            style: TextStyle(
-                                color: Colors.white,
-                                fontWeight: FontWeight.bold,
-                                fontSize: 15),
-                          ).marginOnly(bottom: 6)),
-                        ]
-                      : <Widget>[]) +
-                  <Widget>[
-                    Text(
-                      translate(content),
-                      style: TextStyle(
-                          height: 1.5,
-                          color: Colors.white,
-                          fontWeight: FontWeight.normal,
-                          fontSize: 13),
-                    ).marginOnly(bottom: 20)
-                  ] +
-                  (btnText.isNotEmpty
-                      ? <Widget>[
-                          Row(
-                              mainAxisAlignment: MainAxisAlignment.center,
-                              children: [
-                                FixedWidthButton(
-                                  width: 150,
-                                  padding: 8,
-                                  isOutline: true,
-                                  text: translate(btnText),
-                                  textColor: Colors.white,
-                                  borderColor: Colors.white,
-                                  textSize: 20,
-                                  radius: 10,
-                                  onTap: onPressed,
-                                )
-                              ])
-                        ]
-                      : <Widget>[]) +
-                  (help != null
-                      ? <Widget>[
-                          Center(
-                              child: InkWell(
-                                  onTap: () async =>
-                                      await launchUrl(Uri.parse(link!)),
+              decoration: BoxDecoration(
+                  gradient: LinearGradient(
+                begin: Alignment.centerLeft,
+                end: Alignment.centerRight,
+                colors: [
+                  Color.fromARGB(255, 226, 66, 188),
+                  Color.fromARGB(255, 244, 114, 124),
+                ],
+              )),
+              padding: EdgeInsets.all(20),
+              child: Column(
+                  mainAxisAlignment: MainAxisAlignment.start,
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: (title.isNotEmpty
+                          ? <Widget>[
+                              Center(
                                   child: Text(
-                                    translate(help),
-                                    style: TextStyle(
-                                        decoration: TextDecoration.underline,
-                                        color: Colors.white,
-                                        fontSize: 12),
-                                  )).marginOnly(top: 6)),
-                        ]
-                      : <Widget>[]))),
+                                translate(title),
+                                style: TextStyle(
+                                    color: Colors.white,
+                                    fontWeight: FontWeight.bold,
+                                    fontSize: 15),
+                              ).marginOnly(bottom: 6)),
+                            ]
+                          : <Widget>[]) +
+                      <Widget>[
+                        Text(
+                          translate(content),
+                          style: TextStyle(
+                              height: 1.5,
+                              color: Colors.white,
+                              fontWeight: FontWeight.normal,
+                              fontSize: 13),
+                        ).marginOnly(bottom: 20)
+                      ] +
+                      (btnText.isNotEmpty
+                          ? <Widget>[
+                              Row(
+                                  mainAxisAlignment: MainAxisAlignment.center,
+                                  children: [
+                                    FixedWidthButton(
+                                      width: 150,
+                                      padding: 8,
+                                      isOutline: true,
+                                      text: translate(btnText),
+                                      textColor: Colors.white,
+                                      borderColor: Colors.white,
+                                      textSize: 20,
+                                      radius: 10,
+                                      onTap: onPressed,
+                                    )
+                                  ])
+                            ]
+                          : <Widget>[]) +
+                      (help != null
+                          ? <Widget>[
+                              Center(
+                                  child: InkWell(
+                                      onTap: () async =>
+                                          await launchUrl(Uri.parse(link!)),
+                                      child: Text(
+                                        translate(help),
+                                        style: TextStyle(
+                                            decoration:
+                                                TextDecoration.underline,
+                                            color: Colors.white,
+                                            fontSize: 12),
+                                      )).marginOnly(top: 6)),
+                            ]
+                          : <Widget>[]))),
         ),
         if (closeButton != null && closeButton == true)
-        Positioned(
-          top: 18,
-          right: 0,
-          child: IconButton(
-            icon: Icon(
-              Icons.close,
-              color: Colors.white,
-              size: 20,
+          Positioned(
+            top: 18,
+            right: 0,
+            child: IconButton(
+              icon: Icon(
+                Icons.close,
+                color: Colors.white,
+                size: 20,
+              ),
+              onPressed: closeCard,
             ),
-            onPressed: closeCard,
           ),
-        ),
       ],
     );
   }
@@ -555,6 +599,22 @@ class _DesktopHomePageState extends State<DesktopHomePage>
     Get.put<RxBool>(svcStopped, tag: 'stop-service');
     rustDeskWinManager.registerActiveWindowListener(onActiveWindowChanged);
 
+    screenToMap(window_size.Screen screen) => {
+          'frame': {
+            'l': screen.frame.left,
+            't': screen.frame.top,
+            'r': screen.frame.right,
+            'b': screen.frame.bottom,
+          },
+          'visibleFrame': {
+            'l': screen.visibleFrame.left,
+            't': screen.visibleFrame.top,
+            'r': screen.visibleFrame.right,
+            'b': screen.visibleFrame.bottom,
+          },
+          'scaleFactor': screen.scaleFactor,
+        };
+
     rustDeskWinManager.setMethodHandler((call, fromWindowId) async {
       debugPrint(
           "[Main] call ${call.method} with args ${call.arguments} from window $fromWindowId");
@@ -563,24 +623,13 @@ class _DesktopHomePageState extends State<DesktopHomePage>
       } else if (call.method == kWindowGetWindowInfo) {
         final screen = (await window_size.getWindowInfo()).screen;
         if (screen == null) {
-          return "";
+          return '';
         } else {
-          return jsonEncode({
-            'frame': {
-              'l': screen.frame.left,
-              't': screen.frame.top,
-              'r': screen.frame.right,
-              'b': screen.frame.bottom,
-            },
-            'visibleFrame': {
-              'l': screen.visibleFrame.left,
-              't': screen.visibleFrame.top,
-              'r': screen.visibleFrame.right,
-              'b': screen.visibleFrame.bottom,
-            },
-            'scaleFactor': screen.scaleFactor,
-          });
+          return jsonEncode(screenToMap(screen));
         }
+      } else if (call.method == kWindowGetScreenList) {
+        return jsonEncode(
+            (await window_size.getScreenList()).map(screenToMap).toList());
       } else if (call.method == kWindowActionRebuild) {
         reloadCurrentWindow();
       } else if (call.method == kWindowEventShow) {
@@ -613,8 +662,9 @@ class _DesktopHomePageState extends State<DesktopHomePage>
         final peerId = args['peer_id'] as String;
         final display = args['display'] as int;
         final displayCount = args['display_count'] as int;
+        final screenRect = parseParamScreenRect(args);
         await rustDeskWinManager.openMonitorSession(
-            windowId, peerId, display, displayCount);
+            windowId, peerId, display, displayCount, screenRect);
       }
     });
     _uniLinksSubscription = listenUniLinks();

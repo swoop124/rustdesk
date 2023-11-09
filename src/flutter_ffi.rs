@@ -39,11 +39,15 @@ fn initialize(app_dir: &str) {
     *config::APP_DIR.write().unwrap() = app_dir.to_owned();
     #[cfg(target_os = "android")]
     {
+        // flexi_logger can't work when android_logger initialized.
+        #[cfg(debug_assertions)]
         android_logger::init_once(
             android_logger::Config::default()
                 .with_max_level(log::LevelFilter::Debug) // limit log level
                 .with_tag("ffi"), // logs will show under mytag tag
         );
+        #[cfg(not(debug_assertions))]
+        hbb_common::init_log(false, "");
         #[cfg(feature = "mediacodec")]
         scrap::mediacodec::check_mediacodec();
         crate::common::test_rendezvous_server();
@@ -206,6 +210,7 @@ pub fn session_reconnect(session_id: SessionID, force_relay: bool) {
     if let Some(session) = sessions::get_session_by_session_id(&session_id) {
         session.reconnect(force_relay);
     }
+    session_on_waiting_for_image_dialog_show(session_id);
 }
 
 pub fn session_toggle_option(session_id: SessionID, value: String) {
@@ -339,7 +344,9 @@ pub fn session_set_reverse_mouse_wheel(session_id: SessionID, value: String) {
     }
 }
 
-pub fn session_get_displays_as_individual_windows(session_id: SessionID) -> SyncReturn<Option<String>> {
+pub fn session_get_displays_as_individual_windows(
+    session_id: SessionID,
+) -> SyncReturn<Option<String>> {
     if let Some(session) = sessions::get_session_by_session_id(&session_id) {
         SyncReturn(Some(session.get_displays_as_individual_windows()))
     } else {
@@ -350,6 +357,27 @@ pub fn session_get_displays_as_individual_windows(session_id: SessionID) -> Sync
 pub fn session_set_displays_as_individual_windows(session_id: SessionID, value: String) {
     if let Some(session) = sessions::get_session_by_session_id(&session_id) {
         session.save_displays_as_individual_windows(value);
+    }
+}
+
+pub fn session_get_use_all_my_displays_for_the_remote_session(
+    session_id: SessionID,
+) -> SyncReturn<Option<String>> {
+    if let Some(session) = sessions::get_session_by_session_id(&session_id) {
+        SyncReturn(Some(
+            session.get_use_all_my_displays_for_the_remote_session(),
+        ))
+    } else {
+        SyncReturn(None)
+    }
+}
+
+pub fn session_set_use_all_my_displays_for_the_remote_session(
+    session_id: SessionID,
+    value: String,
+) {
+    if let Some(session) = sessions::get_session_by_session_id(&session_id) {
+        session.save_use_all_my_displays_for_the_remote_session(value);
     }
 }
 
@@ -367,6 +395,7 @@ pub fn session_is_keyboard_mode_supported(session_id: SessionID, mode: String) -
             SyncReturn(is_keyboard_mode_supported(
                 &mode,
                 session.get_peer_version(),
+                &session.peer_platform(),
             ))
         } else {
             SyncReturn(false)
@@ -401,13 +430,7 @@ pub fn session_ctrl_alt_del(session_id: SessionID) {
 }
 
 pub fn session_switch_display(session_id: SessionID, value: Vec<i32>) {
-    if let Some(session) = sessions::get_session_by_session_id(&session_id) {
-        if value.len() == 1 {
-            session.switch_display(value[0]);
-        } else {
-            session.capture_displays(vec![], vec![], value);
-        }
-    }
+    sessions::session_switch_display(session_id, value);
 }
 
 pub fn session_handle_flutter_key_event(
@@ -928,6 +951,25 @@ pub fn main_load_recent_peers_sync() -> SyncReturn<String> {
     SyncReturn("".to_string())
 }
 
+pub fn main_load_lan_peers_sync() -> SyncReturn<String> {
+    let data = HashMap::from([
+        ("name", "load_lan_peers".to_owned()),
+        (
+            "peers",
+            serde_json::to_string(&get_lan_peers()).unwrap_or_default(),
+        ),
+    ]);
+    return SyncReturn(serde_json::ser::to_string(&data).unwrap_or("".to_owned()));
+}
+
+pub fn main_load_ab_sync() -> SyncReturn<String> {
+    return SyncReturn(serde_json::to_string(&config::Ab::load()).unwrap_or_default());
+}
+
+pub fn main_load_group_sync() -> SyncReturn<String> {
+    return SyncReturn(serde_json::to_string(&config::Group::load()).unwrap_or_default());
+}
+
 pub fn main_load_recent_peers_for_ab(filter: String) -> String {
     let id_filters = serde_json::from_str::<Vec<String>>(&filter).unwrap_or_default();
     let id_filters = if id_filters.is_empty() {
@@ -1047,7 +1089,7 @@ pub fn main_get_user_default_option(key: String) -> SyncReturn<String> {
 }
 
 pub fn main_handle_relay_id(id: String) -> String {
-    handle_relay_id(id)
+    handle_relay_id(&id).to_owned()
 }
 
 pub fn main_get_main_display() -> SyncReturn<String> {
@@ -1065,6 +1107,29 @@ pub fn main_get_main_display() -> SyncReturn<String> {
             ]))
             .unwrap_or_default();
         }
+    }
+    SyncReturn(display_info)
+}
+
+pub fn main_get_displays() -> SyncReturn<String> {
+    #[cfg(target_os = "ios")]
+    let display_info = "".to_owned();
+    #[cfg(not(target_os = "ios"))]
+    let mut display_info = "".to_owned();
+    #[cfg(not(target_os = "ios"))]
+    if let Ok(displays) = crate::display_service::try_get_displays() {
+        let displays = displays
+            .iter()
+            .map(|d| {
+                HashMap::from([
+                    ("x", d.origin().0),
+                    ("y", d.origin().1),
+                    ("w", d.width() as i32),
+                    ("h", d.height() as i32),
+                ])
+            })
+            .collect::<Vec<_>>();
+        display_info = serde_json::to_string(&displays).unwrap_or_default();
     }
     SyncReturn(display_info)
 }
@@ -1331,6 +1396,12 @@ pub fn session_on_waiting_for_image_dialog_show(session_id: SessionID) {
     super::flutter::session_on_waiting_for_image_dialog_show(session_id);
 }
 
+pub fn session_toggle_virtual_display(session_id: SessionID, index: i32, on: bool) {
+    if let Some(session) = sessions::get_session_by_session_id(&session_id) {
+        session.toggle_virtual_display(index, on);
+    }
+}
+
 pub fn main_set_home_dir(_home: String) {
     #[cfg(any(target_os = "android", target_os = "ios"))]
     {
@@ -1458,6 +1529,21 @@ pub fn cm_switch_back(conn_id: i32) {
     crate::ui_cm_interface::switch_back(conn_id);
 }
 
+pub fn cm_get_config(name: String) -> String {
+    #[cfg(not(target_os = "ios"))]
+    {
+        if let Ok(Some(v)) = crate::ipc::get_config(&name) {
+            v
+        } else {
+            "".to_string()
+        }
+    }
+    #[cfg(target_os = "ios")]
+    {
+        "".to_string()
+    }
+}
+
 pub fn main_get_build_date() -> String {
     crate::BUILD_DATE.to_string()
 }
@@ -1515,7 +1601,7 @@ pub fn main_is_installed() -> SyncReturn<bool> {
 
 pub fn main_start_grab_keyboard() -> SyncReturn<bool> {
     #[cfg(target_os = "linux")]
-    if !*crate::common::IS_X11 {
+    if !crate::platform::linux::is_x11() {
         return SyncReturn(false);
     }
     crate::keyboard::client::start_grab_loop();
@@ -1647,6 +1733,17 @@ pub fn main_use_texture_render() -> SyncReturn<bool> {
     {
         SyncReturn(true)
     }
+}
+
+pub fn main_has_file_clipboard() -> SyncReturn<bool> {
+    let ret = cfg!(any(
+        target_os = "windows",
+        all(
+            feature = "unix-file-copy-paste",
+            any(target_os = "linux", target_os = "macos")
+        )
+    ));
+    SyncReturn(ret)
 }
 
 pub fn cm_init() {
@@ -1864,6 +1961,17 @@ pub fn plugin_install(_id: String, _b: bool) {
 
 pub fn is_support_multi_ui_session(version: String) -> SyncReturn<bool> {
     SyncReturn(crate::common::is_support_multi_ui_session(&version))
+}
+
+pub fn is_selinux_enforcing() -> SyncReturn<bool> {
+    #[cfg(target_os = "linux")]
+    {
+        SyncReturn(crate::platform::linux::is_selinux_enforcing())
+    }
+    #[cfg(not(target_os = "linux"))]
+    {
+        SyncReturn(false)
+    }
 }
 
 #[cfg(target_os = "android")]

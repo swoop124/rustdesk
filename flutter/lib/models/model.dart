@@ -138,8 +138,9 @@ class FfiModel with ChangeNotifier {
     sessionId = parent.target!.sessionId;
   }
 
-  Rect? displaysRect() {
-    final displays = _pi.getCurDisplays();
+  Rect? globalDisplaysRect() => _getDisplaysRect(_pi.displays);
+  Rect? displaysRect() => _getDisplaysRect(_pi.getCurDisplays());
+  Rect? _getDisplaysRect(List<Display> displays) {
     if (displays.isEmpty) {
       return null;
     }
@@ -227,7 +228,7 @@ class FfiModel with ChangeNotifier {
     }, sessionId, peerId);
     updatePrivacyMode(data.updatePrivacyMode, sessionId, peerId);
     setConnectionType(peerId, data.secure, data.direct);
-    await handlePeerInfo(data.peerInfo, peerId);
+    await handlePeerInfo(data.peerInfo, peerId, true);
     for (final element in data.cursorDataList) {
       updateLastCursorId(element);
       await handleCursorData(element);
@@ -245,9 +246,11 @@ class FfiModel with ChangeNotifier {
       if (name == 'msgbox') {
         handleMsgBox(evt, sessionId, peerId);
       } else if (name == 'peer_info') {
-        handlePeerInfo(evt, peerId);
+        handlePeerInfo(evt, peerId, false);
       } else if (name == 'sync_peer_info') {
         handleSyncPeerInfo(evt, sessionId, peerId);
+      } else if (name == 'sync_platform_additions') {
+        handlePlatformAdditions(evt, sessionId, peerId);
       } else if (name == 'connection_ready') {
         setConnectionType(
             peerId, evt['secure'] == 'true', evt['direct'] == 'true');
@@ -350,7 +353,7 @@ class FfiModel with ChangeNotifier {
         }
       } else if (name == "cm_file_transfer_log") {
         if (isDesktop) {
-          gFFI.cmFileModel.onFileTransferLog(evt['log']);
+          gFFI.cmFileModel.onFileTransferLog(evt);
         }
       } else {
         debugPrint('Unknown event name: $name');
@@ -428,17 +431,19 @@ class FfiModel with ChangeNotifier {
 
   handleSwitchDisplay(
       Map<String, dynamic> evt, SessionID sessionId, String peerId) {
-    final curDisplay = int.parse(evt['display']);
-
-    // The message should be handled by the another UI session.
-    if (isChooseDisplayToOpenInNewWindow(_pi, sessionId)) {
-      if (curDisplay != _pi.currentDisplay) {
-        return;
-      }
-    }
+    final display = int.parse(evt['display']);
 
     if (_pi.currentDisplay != kAllDisplayValue) {
-      _pi.currentDisplay = curDisplay;
+      if (bind.peerGetDefaultSessionsCount(id: peerId) > 1) {
+        if (display != _pi.currentDisplay) {
+          return;
+        }
+      }
+      if (!_pi.isSupportMultiUiSession) {
+        _pi.currentDisplay = display;
+      }
+      // If `isSupportMultiUiSession` is true, the switch display message should not be used to update current display.
+      // It is only used to update the display info.
     }
 
     var newDisplay = Display();
@@ -451,16 +456,24 @@ class FfiModel with ChangeNotifier {
         int.tryParse(evt['original_width']) ?? kInvalidResolutionValue;
     newDisplay.originalHeight =
         int.tryParse(evt['original_height']) ?? kInvalidResolutionValue;
-    _pi.displays[curDisplay] = newDisplay;
+    _pi.displays[display] = newDisplay;
 
-    updateCurDisplay(sessionId);
-    try {
-      CurrentDisplayState.find(peerId).value = curDisplay;
-    } catch (e) {
-      //
+    if (!_pi.isSupportMultiUiSession || _pi.currentDisplay == display) {
+      updateCurDisplay(sessionId);
     }
+
+    if (!_pi.isSupportMultiUiSession) {
+      try {
+        CurrentDisplayState.find(peerId).value = display;
+      } catch (e) {
+        //
+      }
+    }
+
     parent.target?.recordingModel.onSwitchDisplay();
-    handleResolutions(peerId, evt['resolutions']);
+    if (!_pi.isSupportMultiUiSession || _pi.currentDisplay == display) {
+      handleResolutions(peerId, evt['resolutions']);
+    }
     notifyListeners();
   }
 
@@ -514,7 +527,9 @@ class FfiModel with ChangeNotifier {
       String link, bool hasRetry, OverlayDialogManager dialogManager,
       {bool? hasCancel}) {
     msgBox(sessionId, type, title, text, link, dialogManager,
-        hasCancel: hasCancel, reconnect: reconnect);
+        hasCancel: hasCancel,
+        reconnect: reconnect,
+        reconnectTimeout: hasRetry ? _reconnects : null);
     _timer?.cancel();
     if (hasRetry) {
       _timer = Timer(Duration(seconds: _reconnects), () {
@@ -530,6 +545,7 @@ class FfiModel with ChangeNotifier {
       bool forceRelay) {
     bind.sessionReconnect(sessionId: sessionId, forceRelay: forceRelay);
     clearPermissions();
+    dialogManager.dismissAll();
     dialogManager.showLoading(translate('Connecting...'),
         onCancel: closeConnection);
   }
@@ -623,8 +639,10 @@ class FfiModel with ChangeNotifier {
   }
 
   /// Handle the peer info event based on [evt].
-  handlePeerInfo(Map<String, dynamic> evt, String peerId) async {
-    cachedPeerData.peerInfo = evt;
+  handlePeerInfo(Map<String, dynamic> evt, String peerId, bool isCache) async {
+    // Map clone is required here, otherwise "evt" may be changed by other threads through the reference.
+    // Because this function is asynchronous, there's an "await" in this function.
+    cachedPeerData.peerInfo = {...evt};
 
     // recent peer updated by handle_peer_info(ui_session_interface.rs) --> handle_peer_info(client.rs) --> save_config(client.rs)
     bind.mainLoadRecentPeers();
@@ -663,11 +681,12 @@ class FfiModel with ChangeNotifier {
     if (connType == ConnType.fileTransfer) {
       parent.target?.fileModel.onReady();
     } else if (connType == ConnType.defaultConn) {
-      _pi.displays = [];
+      List<Display> newDisplays = [];
       List<dynamic> displays = json.decode(evt['displays']);
       for (int i = 0; i < displays.length; ++i) {
-        _pi.displays.add(evtToDisplay(displays[i]));
+        newDisplays.add(evtToDisplay(displays[i]));
       }
+      _pi.displays.value = newDisplays;
       _pi.displaysCount.value = _pi.displays.length;
       if (_pi.currentDisplay < _pi.displays.length) {
         // now replaced to _updateCurDisplay
@@ -689,12 +708,12 @@ class FfiModel with ChangeNotifier {
               sessionId: sessionId, arg: 'view-only'));
     }
     if (connType == ConnType.defaultConn) {
-      final platformDdditions = evt['platform_additions'];
-      if (platformDdditions != null && platformDdditions != '') {
+      final platformAdditions = evt['platform_additions'];
+      if (platformAdditions != null && platformAdditions != '') {
         try {
-          _pi.platformDdditions = json.decode(platformDdditions);
+          _pi.platformAdditions = json.decode(platformAdditions);
         } catch (e) {
-          debugPrint('Failed to decode platformDdditions $e');
+          debugPrint('Failed to decode platformAdditions $e');
         }
       }
     }
@@ -702,7 +721,86 @@ class FfiModel with ChangeNotifier {
     _pi.isSet.value = true;
     stateGlobal.resetLastResolutionGroupValues(peerId);
 
+    if (isDesktop) {
+      checkDesktopKeyboardMode();
+    }
+
     notifyListeners();
+
+    if (!isCache) {
+      tryUseAllMyDisplaysForTheRemoteSession(peerId);
+    }
+  }
+
+  checkDesktopKeyboardMode() async {
+    final curMode = await bind.sessionGetKeyboardMode(sessionId: sessionId);
+    if (curMode != null) {
+      if (bind.sessionIsKeyboardModeSupported(
+          sessionId: sessionId, mode: curMode)) {
+        return;
+      }
+    }
+
+    // If current keyboard mode is not supported, change to another one.
+
+    if (stateGlobal.grabKeyboard) {
+      for (final mode in [kKeyMapMode, kKeyLegacyMode]) {
+        if (bind.sessionIsKeyboardModeSupported(
+            sessionId: sessionId, mode: mode)) {
+          bind.sessionSetKeyboardMode(sessionId: sessionId, value: mode);
+          break;
+        }
+      }
+    } else {
+      for (final mode in [kKeyMapMode, kKeyTranslateMode, kKeyLegacyMode]) {
+        if (bind.sessionIsKeyboardModeSupported(
+            sessionId: sessionId, mode: mode)) {
+          bind.sessionSetKeyboardMode(sessionId: sessionId, value: mode);
+          break;
+        }
+      }
+    }
+  }
+
+  tryUseAllMyDisplaysForTheRemoteSession(String peerId) async {
+    if (bind.sessionGetUseAllMyDisplaysForTheRemoteSession(
+            sessionId: sessionId) !=
+        'Y') {
+      return;
+    }
+
+    if (!_pi.isSupportMultiDisplay || _pi.displays.length <= 1) {
+      return;
+    }
+
+    final screenRectList = await getScreenRectList();
+    if (screenRectList.length <= 1) {
+      return;
+    }
+
+    // to-do: peer currentDisplay is the primary display, but the primary display may not be the first display.
+    // local primary display also may not be the first display.
+    //
+    // 0 is assumed to be the primary display here, for now.
+
+    // move to the first display and set fullscreen
+    bind.sessionSwitchDisplay(
+        sessionId: sessionId, value: Int32List.fromList([0]));
+    _pi.currentDisplay = 0;
+    try {
+      CurrentDisplayState.find(peerId).value = _pi.currentDisplay;
+    } catch (e) {
+      //
+    }
+    await tryMoveToScreenAndSetFullscreen(screenRectList[0]);
+
+    final length = _pi.displays.length < screenRectList.length
+        ? _pi.displays.length
+        : screenRectList.length;
+    for (var i = 1; i < length; i++) {
+      openMonitorInNewTabOrWindow(i, peerId, _pi,
+          screenRect: screenRectList[i]);
+    }
   }
 
   tryShowAndroidActionsOverlay({int delayMSecs = 10}) {
@@ -778,8 +876,9 @@ class FfiModel with ChangeNotifier {
       for (int i = 0; i < displays.length; ++i) {
         newDisplays.add(evtToDisplay(displays[i]));
       }
-      _pi.displays = newDisplays;
+      _pi.displays.value = newDisplays;
       _pi.displaysCount.value = _pi.displays.length;
+
       if (_pi.currentDisplay == kAllDisplayValue) {
         updateCurDisplay(sessionId);
         // to-do: What if the displays are changed?
@@ -814,8 +913,37 @@ class FfiModel with ChangeNotifier {
     notifyListeners();
   }
 
+  handlePlatformAdditions(
+      Map<String, dynamic> evt, SessionID sessionId, String peerId) async {
+    final updateData = evt['platform_additions'] as String?;
+    if (updateData == null) {
+      return;
+    }
+
+    if (updateData.isEmpty) {
+      _pi.platformAdditions.remove(kPlatformAdditionsVirtualDisplays);
+    } else {
+      try {
+        final updateJson = json.decode(updateData) as Map<String, dynamic>;
+        for (final key in updateJson.keys) {
+          _pi.platformAdditions[key] = updateJson[key];
+        }
+        if (!updateJson.containsKey(kPlatformAdditionsVirtualDisplays)) {
+          _pi.platformAdditions.remove(kPlatformAdditionsVirtualDisplays);
+        }
+      } catch (e) {
+        debugPrint('Failed to decode platformAdditions $e');
+      }
+    }
+
+    cachedPeerData.peerInfo['platform_additions'] =
+        json.encode(_pi.platformAdditions);
+  }
+
   // Directly switch to the new display without waiting for the response.
   switchToNewDisplay(int display, SessionID sessionId, String peerId) {
+    // VideoHandler creation is upon when video frames are received, so either caching commands(don't know next width/height) or stopping recording when switching displays.
+    parent.target?.recordingModel.onClose();
     // no need to wait for the response
     pi.currentDisplay = display;
     updateCurDisplay(sessionId);
@@ -824,7 +952,6 @@ class FfiModel with ChangeNotifier {
     } catch (e) {
       //
     }
-    parent.target?.recordingModel.onSwitchDisplay();
   }
 
   updateBlockInputState(Map<String, dynamic> evt, String peerId) {
@@ -1734,6 +1861,7 @@ class QualityMonitorData {
   String? delay;
   String? targetBitrate;
   String? codecFormat;
+  String? chroma;
 }
 
 class QualityMonitorModel with ChangeNotifier {
@@ -1787,6 +1915,9 @@ class QualityMonitorModel with ChangeNotifier {
       if ((evt['codec_format'] as String).isNotEmpty) {
         _data.codecFormat = evt['codec_format'];
       }
+      if ((evt['chroma'] as String).isNotEmpty) {
+        _data.chroma = evt['chroma'];
+      }
       notifyListeners();
     } catch (e) {
       //
@@ -1806,56 +1937,66 @@ class RecordingModel with ChangeNotifier {
     int? width = parent.target?.canvasModel.getDisplayWidth();
     int? height = parent.target?.canvasModel.getDisplayHeight();
     if (sessionId == null || width == null || height == null) return;
-    final currentDisplay = parent.target?.ffiModel.pi.currentDisplay;
-    if (currentDisplay != kAllDisplayValue) {
-      bind.sessionRecordScreen(
-          sessionId: sessionId,
-          start: true,
-          display: currentDisplay!,
-          width: width,
-          height: height);
-    }
+    final pi = parent.target?.ffiModel.pi;
+    if (pi == null) return;
+    final currentDisplay = pi.currentDisplay;
+    if (currentDisplay == kAllDisplayValue) return;
+    bind.sessionRecordScreen(
+        sessionId: sessionId,
+        start: true,
+        display: currentDisplay,
+        width: width,
+        height: height);
   }
 
   toggle() async {
     if (isIOS) return;
     final sessionId = parent.target?.sessionId;
     if (sessionId == null) return;
+    final pi = parent.target?.ffiModel.pi;
+    if (pi == null) return;
+    final currentDisplay = pi.currentDisplay;
+    if (currentDisplay == kAllDisplayValue) return;
     _start = !_start;
     notifyListeners();
-    await bind.sessionRecordStatus(sessionId: sessionId, status: _start);
+    await _sendStatusMessage(sessionId, pi, _start);
     if (_start) {
-      final pi = parent.target?.ffiModel.pi;
-      if (pi != null) {
-        sessionRefreshVideo(sessionId, pi);
+      sessionRefreshVideo(sessionId, pi);
+      if (versionCmp(pi.version, '1.2.4') >= 0) {
+        // will not receive SwitchDisplay since 1.2.4
+        onSwitchDisplay();
       }
     } else {
-      final currentDisplay = parent.target?.ffiModel.pi.currentDisplay;
-      if (currentDisplay != kAllDisplayValue) {
-        bind.sessionRecordScreen(
-            sessionId: sessionId,
-            start: false,
-            display: currentDisplay!,
-            width: 0,
-            height: 0);
-      }
-    }
-  }
-
-  onClose() {
-    if (isIOS) return;
-    final sessionId = parent.target?.sessionId;
-    if (sessionId == null) return;
-    _start = false;
-    final currentDisplay = parent.target?.ffiModel.pi.currentDisplay;
-    if (currentDisplay != kAllDisplayValue) {
       bind.sessionRecordScreen(
           sessionId: sessionId,
           start: false,
-          display: currentDisplay!,
+          display: currentDisplay,
           width: 0,
           height: 0);
     }
+  }
+
+  onClose() async {
+    if (isIOS) return;
+    final sessionId = parent.target?.sessionId;
+    if (sessionId == null) return;
+    if (!_start) return;
+    _start = false;
+    final pi = parent.target?.ffiModel.pi;
+    if (pi == null) return;
+    final currentDisplay = pi.currentDisplay;
+    if (currentDisplay == kAllDisplayValue) return;
+    await _sendStatusMessage(sessionId, pi, false);
+    bind.sessionRecordScreen(
+        sessionId: sessionId,
+        start: false,
+        display: currentDisplay,
+        width: 0,
+        height: 0);
+  }
+
+  _sendStatusMessage(SessionID sessionId, PeerInfo pi, bool status) async {
+    await bind.sessionRecordStatus(sessionId: sessionId, status: status);
   }
 }
 
@@ -2200,16 +2341,21 @@ class PeerInfo with ChangeNotifier {
   bool isSupportMultiUiSession = false;
   int currentDisplay = 0;
   int primaryDisplay = kInvalidDisplayIndex;
-  List<Display> displays = [];
+  RxList<Display> displays = <Display>[].obs;
   Features features = Features();
   List<Resolution> resolutions = [];
-  Map<String, dynamic> platformDdditions = {};
+  Map<String, dynamic> platformAdditions = {};
 
   RxInt displaysCount = 0.obs;
   RxBool isSet = false.obs;
 
-  bool get isWayland => platformDdditions['is_wayland'] == true;
-  bool get isHeadless => platformDdditions['headless'] == true;
+  bool get isWayland => platformAdditions[kPlatformAdditionsIsWayland] == true;
+  bool get isHeadless => platformAdditions[kPlatformAdditionsHeadless] == true;
+  bool get isInstalled =>
+      platform != kPeerPlatformWindows ||
+      platformAdditions[kPlatformAdditionsIsInstalled] == true;
+  List<int> get virtualDisplays => List<int>.from(
+      platformAdditions[kPlatformAdditionsVirtualDisplays] ?? []);
 
   bool get isSupportMultiDisplay => isDesktop && isSupportMultiUiSession;
 
@@ -2237,7 +2383,7 @@ class PeerInfo with ChangeNotifier {
     if (currentDisplay == kAllDisplayValue) {
       return null;
     }
-    if (currentDisplay > 0 && currentDisplay < displays.length) {
+    if (currentDisplay >= 0 && currentDisplay < displays.length) {
       return displays[currentDisplay];
     } else {
       return null;
