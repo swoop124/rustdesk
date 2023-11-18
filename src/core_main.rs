@@ -148,7 +148,7 @@ pub fn core_main() -> Option<Vec<String>> {
     {
         use crate::portable_service::client;
         if let Err(e) = client::start_portable_service(client::StartPara::Direct) {
-            log::error!("Failed to start portable service:{:?}", e);
+            log::error!("Failed to start portable service: {:?}", e);
         }
     }
     #[cfg(windows)]
@@ -244,6 +244,8 @@ pub fn core_main() -> Option<Vec<String>> {
             return None;
         } else if args[0] == "--server" {
             log::info!("start --server with user {}", crate::username());
+            #[cfg(all(windows, feature = "virtual_display_driver"))]
+            crate::privacy_mode::restore_reg_connectivity();
             #[cfg(any(target_os = "linux", target_os = "windows"))]
             {
                 crate::start_server(true);

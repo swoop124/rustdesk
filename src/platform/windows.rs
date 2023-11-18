@@ -3,7 +3,7 @@ use crate::common::PORTABLE_APPNAME_RUNTIME_ENV_KEY;
 use crate::{
     ipc,
     license::*,
-    privacy_win_mag::{self, WIN_MAG_INJECTED_PROCESS_EXE},
+    privacy_mode::win_mag::{self, WIN_MAG_INJECTED_PROCESS_EXE},
 };
 use hbb_common::{
     allow_err,
@@ -472,7 +472,7 @@ async fn run_service(_arguments: Vec<OsString>) -> ResultType<()> {
         log::info!("Got service control event: {:?}", control_event);
         match control_event {
             ServiceControl::Interrogate => ServiceControlHandlerResult::NoError,
-            ServiceControl::Stop => {
+            ServiceControl::Stop | ServiceControl::Preshutdown | ServiceControl::Shutdown => {
                 send_close(crate::POSTFIX_SERVICE).ok();
                 ServiceControlHandlerResult::NoError
             }
@@ -848,8 +848,8 @@ fn get_default_install_path() -> String {
 }
 
 pub fn check_update_broker_process() -> ResultType<()> {
-    let process_exe = privacy_win_mag::INJECTED_PROCESS_EXE;
-    let origin_process_exe = privacy_win_mag::ORIGIN_PROCESS_EXE;
+    let process_exe = win_mag::INJECTED_PROCESS_EXE;
+    let origin_process_exe = win_mag::ORIGIN_PROCESS_EXE;
 
     let exe_file = std::env::current_exe()?;
     let Some(cur_dir) = exe_file.parent() else {
@@ -857,8 +857,18 @@ pub fn check_update_broker_process() -> ResultType<()> {
     };
     let cur_exe = cur_dir.join(process_exe);
 
+    // Force update broker exe if failed to check modified time.
+    let cmds = format!(
+        "
+        chcp 65001
+        taskkill /F /IM {process_exe}
+        copy /Y \"{origin_process_exe}\" \"{cur_exe}\"
+    ",
+        cur_exe = cur_exe.to_string_lossy(),
+    );
+
     if !std::path::Path::new(&cur_exe).exists() {
-        std::fs::copy(origin_process_exe, cur_exe)?;
+        run_cmds(cmds, false, "update_broker")?;
         return Ok(());
     }
 
@@ -877,15 +887,6 @@ pub fn check_update_broker_process() -> ResultType<()> {
         }
     }
 
-    // Force update broker exe if failed to check modified time.
-    let cmds = format!(
-        "
-        chcp 65001
-        taskkill /F /IM {process_exe}
-        copy /Y \"{origin_process_exe}\" \"{cur_exe}\"
-    ",
-        cur_exe = cur_exe.to_string_lossy(),
-    );
     run_cmds(cmds, false, "update_broker")?;
 
     Ok(())
@@ -925,8 +926,8 @@ pub fn copy_exe_cmd(src_exe: &str, exe: &str, path: &str) -> ResultType<String> 
         {main_exe}
         copy /Y \"{ORIGIN_PROCESS_EXE}\" \"{path}\\{broker_exe}\"
         ",
-        ORIGIN_PROCESS_EXE = privacy_win_mag::ORIGIN_PROCESS_EXE,
-        broker_exe = privacy_win_mag::INJECTED_PROCESS_EXE,
+        ORIGIN_PROCESS_EXE = win_mag::ORIGIN_PROCESS_EXE,
+        broker_exe = win_mag::INJECTED_PROCESS_EXE,
     ))
 }
 
@@ -1503,7 +1504,7 @@ pub fn run_as_system(arg: &str) -> ResultType<()> {
 pub fn elevate_or_run_as_system(is_setup: bool, is_elevate: bool, is_run_as_system: bool) {
     // avoid possible run recursively due to failed run.
     log::info!(
-        "elevate:{}->{:?}, run_as_system:{}->{}",
+        "elevate: {} -> {:?}, run_as_system: {} -> {}",
         is_elevate,
         is_elevated(None),
         is_run_as_system,
@@ -1533,7 +1534,7 @@ pub fn elevate_or_run_as_system(is_setup: bool, is_elevate: bool, is_run_as_syst
                             std::process::exit(0);
                         } else {
                             unsafe {
-                                log::error!("Failed to run as system, errno={}", GetLastError());
+                                log::error!("Failed to run as system, errno = {}", GetLastError());
                             }
                         }
                     }
@@ -1543,14 +1544,14 @@ pub fn elevate_or_run_as_system(is_setup: bool, is_elevate: bool, is_run_as_syst
                             std::process::exit(0);
                         } else {
                             unsafe {
-                                log::error!("Failed to elevate, errno={}", GetLastError());
+                                log::error!("Failed to elevate, errno = {}", GetLastError());
                             }
                         }
                     }
                 }
             }
             Err(_) => unsafe {
-                log::error!("Failed to get elevation status, errno={}", GetLastError());
+                log::error!("Failed to get elevation status, errno = {}", GetLastError());
             },
         }
     }
@@ -2408,13 +2409,13 @@ impl WallPaperRemover {
         let old_path = match Self::get_recent_wallpaper() {
             Ok(old_path) => old_path,
             Err(e) => {
-                log::info!("Failed to get recent wallpaper:{:?}, use fallback", e);
+                log::info!("Failed to get recent wallpaper: {:?}, use fallback", e);
                 wallpaper::get().map_err(|e| anyhow!(e.to_string()))?
             }
         };
         Self::set_wallpaper(None)?;
         log::info!(
-            "created wallpaper remover,  old_path:{:?},  elapsed:{:?}",
+            "created wallpaper remover,  old_path: {:?},  elapsed: {:?}",
             old_path,
             start.elapsed(),
         );
@@ -2432,7 +2433,7 @@ impl WallPaperRemover {
         let (hkcu, sid) = if is_root() {
             let username = get_active_username();
             let sid = get_sid_of_user(&username)?;
-            log::info!("username:{username}, sid:{sid}");
+            log::info!("username: {username}, sid: {sid}");
             (RegKey::predef(HKEY_USERS), format!("{}\\", sid))
         } else {
             (RegKey::predef(HKEY_CURRENT_USER), "".to_string())

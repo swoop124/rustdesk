@@ -26,7 +26,7 @@ use hbb_common::{
         supported_decoding::PreferCodec, video_frame, Chroma, CodecAbility, EncodedVideoFrames,
         SupportedDecoding, SupportedEncoding, VideoFrame,
     },
-    sysinfo::{System},
+    sysinfo::System,
     tokio::time::Instant,
     ResultType,
 };
@@ -108,7 +108,7 @@ pub enum EncodingUpdate {
 
 impl Encoder {
     pub fn new(config: EncoderCfg, i444: bool) -> ResultType<Encoder> {
-        log::info!("new encoder:{config:?}, i444:{i444}");
+        log::info!("new encoder: {config:?}, i444: {i444}");
         match config {
             EncoderCfg::VPX(_) => Ok(Encoder {
                 codec: Box::new(VpxEncoder::new(config, i444)?),
@@ -198,7 +198,9 @@ impl Encoder {
         if av1_useable {
             auto_codec = CodecName::AV1;
         }
-        if vp8_useable && System::new_all().total_memory() <= 4 * 1024 * 1024 * 1024 {
+        let mut system = System::new();
+        system.refresh_memory();
+        if vp8_useable && system.total_memory() <= 4 * 1024 * 1024 * 1024 {
             // 4 Gb
             auto_codec = CodecName::VP8
         }
@@ -213,7 +215,7 @@ impl Encoder {
         }
 
         log::info!(
-            "connection count:{}, used preference:{:?}, encoder:{:?}",
+            "connection count: {}, used preference: {:?}, encoder: {:?}",
             decodings.len(),
             preference,
             *name
@@ -581,7 +583,8 @@ pub fn codec_thread_num() -> usize {
     }
     #[cfg(not(windows))]
     {
-        let s = System::new_all();
+        let mut s = System::new();
+        s.refresh_cpu_usage();
         // https://man7.org/linux/man-pages/man3/getloadavg.3.html
         let avg = s.load_average();
         info = format!("cpu loadavg:{}", avg.one);
@@ -597,7 +600,7 @@ pub fn codec_thread_num() -> usize {
         None => true,
     };
     if log {
-        log::info!("cpu num:{max}, {info}, codec thread:{res}");
+        log::info!("cpu num: {max}, {info}, codec thread: {res}");
         *THREAD_LOG_TIME.lock().unwrap() = Some(Instant::now());
     }
     res
