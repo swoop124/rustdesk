@@ -122,6 +122,16 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "e999941b234f3131b00bc13c22d06e8c5ff726d1b6318ac7eb276997bbb4fef0"
 
 [[package]]
+name = "android-wakelock"
+version = "0.1.0"
+source = "git+https://github.com/21pages/android-wakelock#d0292e5a367e627c4fa6f1ca6bdfad005dca7d90"
+dependencies = [
+ "jni 0.21.1",
+ "log",
+ "ndk-context",
+]
+
+[[package]]
 name = "android_log-sys"
 version = "0.3.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -2868,7 +2878,7 @@ dependencies = [
  "toml 0.7.8",
  "uuid",
  "winapi 0.3.9",
- "zstd 0.12.4",
+ "zstd 0.13.0",
 ]
 
 [[package]]
@@ -5197,6 +5207,7 @@ dependencies = [
 name = "rustdesk"
 version = "1.2.4"
 dependencies = [
+ "android-wakelock",
  "android_logger",
  "arboard",
  "async-process",
@@ -5487,6 +5498,7 @@ dependencies = [
  "lazy_static",
  "log",
  "ndk",
+ "ndk-context",
  "num_cpus",
  "pkg-config",
  "quest",
@@ -7530,11 +7542,11 @@ dependencies = [
 
 [[package]]
 name = "zstd"
-version = "0.12.4"
+version = "0.13.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "1a27595e173641171fc74a1232b7b1c7a7cb6e18222c11e9dfb9888fa424c53c"
+checksum = "bffb3309596d527cfcba7dfc6ed6052f1d39dfbd7c867aa2e865e4a449c10110"
 dependencies = [
- "zstd-safe 6.0.6",
+ "zstd-safe 7.0.0",
 ]
 
 [[package]]
@@ -7549,11 +7561,10 @@ dependencies = [
 
 [[package]]
 name = "zstd-safe"
-version = "6.0.6"
+version = "7.0.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "ee98ffd0b48ee95e6c5168188e44a54550b1564d9d530ee21d5f0eaed1069581"
+checksum = "43747c7422e2924c11144d5229878b98180ef8b06cca4ab5af37afc8a8d8ea3e"
 dependencies = [
- "libc",
  "zstd-sys",
 ]
 
