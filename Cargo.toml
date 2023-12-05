@@ -71,7 +71,7 @@ default-net = "0.14"
 wol-rs = "1.0"
 flutter_rust_bridge = { version = "=1.80", features = ["uuid"], optional = true}
 errno = "0.3"
-rdev = { git = "https://github.com/fufesou/rdev", branch = "master" }
+rdev = { git = "https://github.com/fufesou/rdev" }
 url = { version = "2.3", features = ["serde"] }
 crossbeam-queue = "0.3"
 hex = "0.4"
@@ -94,7 +94,7 @@ sys-locale = "0.3"
 enigo = { path = "libs/enigo", features = [ "with_serde" ] }
 clipboard = { path = "libs/clipboard" }
 ctrlc = "3.2"
-arboard = "3.2"
+arboard = { version = "3.2", features = ["wayland-data-control"] }
 system_shutdown = "4.0"
 
 [target.'cfg(target_os = "windows")'.dependencies]
