@@ -30,7 +30,11 @@ use crate::{
 pub const RENDEZVOUS_TIMEOUT: u64 = 12_000;
 pub const CONNECT_TIMEOUT: u64 = 18_000;
 pub const READ_TIMEOUT: u64 = 18_000;
-pub const REG_INTERVAL: i64 = 12_000;
+// https://github.com/quic-go/quic-go/issues/525#issuecomment-294531351
+// https://datatracker.ietf.org/doc/html/draft-hamilton-early-deployment-quic-00#section-6.10
+// 15 seconds is recommended by quic, though oneSIP recommend 25 seconds,
+// https://www.onsip.com/voip-resources/voip-fundamentals/what-is-nat-keepalive
+pub const REG_INTERVAL: i64 = 15_000;
 pub const COMPRESS_LEVEL: i32 = 3;
 const SERIAL: i32 = 3;
 const PASSWORD_ENC_VERSION: &str = "00";
@@ -488,7 +492,6 @@ impl Config {
         suffix: &str,
     ) -> T {
         let file = Self::file_(suffix);
-        log::debug!("Configuration path: {}", file.display());
         let cfg = load_path(file);
         if suffix.is_empty() {
             log::trace!("{:?}", cfg);
@@ -1214,26 +1217,19 @@ impl PeerConfig {
     }
 
     fn insert_default_options(mp: &mut HashMap<String, String>) {
-        let mut key = "codec-preference";
-        if !mp.contains_key(key) {
-            mp.insert(key.to_owned(), UserDefaultConfig::read().get(key));
-        }
-        key = "custom-fps";
-        if !mp.contains_key(key) {
-            mp.insert(key.to_owned(), UserDefaultConfig::read().get(key));
-        }
-        key = "zoom-cursor";
-        if !mp.contains_key(key) {
-            mp.insert(key.to_owned(), UserDefaultConfig::read().get(key));
-        }
-        key = "touch-mode";
-        if !mp.contains_key(key) {
-            mp.insert(key.to_owned(), UserDefaultConfig::read().get(key));
-        }
-        key = "i444";
-        if !mp.contains_key(key) {
-            mp.insert(key.to_owned(), UserDefaultConfig::read().get(key));
-        }
+        [
+            "codec-preference",
+            "custom-fps",
+            "zoom-cursor",
+            "touch-mode",
+            "i444",
+            "swap-left-right-mouse",
+        ]
+        .map(|key| {
+            if !mp.contains_key(key) {
+                mp.insert(key.to_owned(), UserDefaultConfig::read().get(key));
+            }
+        });
     }
 }
 
@@ -1488,6 +1484,26 @@ impl HwCodecConfig {
 
     pub fn clear() {
         HwCodecConfig::default().store();
+    }
+}
+
+#[derive(Debug, Default, Serialize, Deserialize, Clone)]
+pub struct GpucodecConfig {
+    #[serde(default, deserialize_with = "deserialize_string")]
+    pub available: String,
+}
+
+impl GpucodecConfig {
+    pub fn load() -> GpucodecConfig {
+        Config::load_::<GpucodecConfig>("_gpucodec")
+    }
+
+    pub fn store(&self) {
+        Config::store_(self, "_gpucodec");
+    }
+
+    pub fn clear() {
+        GpucodecConfig::default().store();
     }
 }
 

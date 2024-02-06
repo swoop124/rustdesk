@@ -576,5 +576,15 @@ pub static ref T: std::collections::HashMap<&'static str, &'static str> =
         ("input_source_1_tip", "Sorgente ingresso (1)"),
         ("input_source_2_tip", "Sorgente ingresso (2)"),
         ("capture_display_elevated_connections_tip", "La cattura di più display non è supportata nella modalità utente con privilegi elevati. Se vuoi controllare più display riprova dopo l'installazione."),
+        ("Swap control-command key", "Scambia tasto controllo-comando"),
+        ("swap-left-right-mouse", "Scambia pulsante sinistro-destro mouse"),
+        ("2FA code", "Codice 2FA"),
+        ("More", "Altro"),
+        ("enable-2fa-title", "Abilita autenticazione a due fattori"),
+        ("enable-2fa-desc", "Configura l'autenticatore.\nPuoi usare un'app di autenticazione come Authy, Microsoft o Google Authenticator sul telefono o desktop.\n\nPer abilitare l'autenticazione a due fattori scansiona il codice QR con l'app e inserisci il codice visualizzato dall'app."),
+        ("wrong-2fa-code", "Impossibile verificare il codice.\nVerifica che le impostazioni del codice e dell'ora locale siano corrette"),
+        ("enter-2fa-title", "Autenticazione a due fattori"),
+        ("Email verification code must be 6 characters.", "Il codice di verifica email deve contenere 6 caratteri."),
+        ("2FA code must be 6 digits.", "Il codice 2FA deve essere composto da 6 cifre."),
     ].iter().cloned().collect();
 }
