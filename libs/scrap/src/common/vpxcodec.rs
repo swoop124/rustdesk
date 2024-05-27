@@ -207,7 +207,7 @@ impl EncoderApi for VpxEncoder {
         self.yuvfmt.clone()
     }
 
-    #[cfg(feature = "gpucodec")]
+    #[cfg(feature = "vram")]
     fn input_texture(&self) -> bool {
         false
     }
@@ -233,6 +233,13 @@ impl EncoderApi for VpxEncoder {
     }
 
     fn support_abr(&self) -> bool {
+        true
+    }
+    fn support_changing_quality(&self) -> bool {
+        true
+    }
+
+    fn latency_free(&self) -> bool {
         true
     }
 }

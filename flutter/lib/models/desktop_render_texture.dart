@@ -1,15 +1,19 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_gpu_texture_renderer/flutter_gpu_texture_renderer.dart';
+import 'package:flutter_hbb/common/shared_state.dart';
 import 'package:flutter_hbb/consts.dart';
 import 'package:flutter_hbb/models/model.dart';
 import 'package:get/get.dart';
-import 'package:texture_rgba_renderer/texture_rgba_renderer.dart';
 
 import '../../common.dart';
 import './platform_model.dart';
 
-final useTextureRender =
-    bind.mainHasPixelbufferTextureRender() || bind.mainHasGpuTextureRender();
+import 'package:texture_rgba_renderer/texture_rgba_renderer.dart'
+    if (dart.library.html) 'package:flutter_hbb/web/texture_rgba_renderer.dart';
+
+// Feature flutter_texture_render need to be enabled if feature vram is enabled.
+final useTextureRender = !isWeb &&
+    (bind.mainHasPixelbufferTextureRender() || bind.mainHasGpuTextureRender());
 
 class _PixelbufferTexture {
   int _textureKey = -1;
@@ -36,7 +40,7 @@ class _PixelbufferTexture {
           final ptr = await textureRenderer.getTexturePtr(_textureKey);
           platformFFI.registerPixelbufferTexture(sessionId, display, ptr);
           debugPrint(
-              "create pixelbuffer texture: peerId: ${ffi.id} display:$_display, textureId:$id");
+              "create pixelbuffer texture: peerId: ${ffi.id} display:$_display, textureId:$id, texturePtr:$ptr");
         }
       });
     }
@@ -98,13 +102,15 @@ class _GpuTexture {
     }
   }
 
-  destroy(FFI ffi) async {
+  destroy(bool unregisterTexture, FFI ffi) async {
     // must stop texture render, render unregistered texture cause crash
     if (!_destroying && support && _sessionId != null && _textureId != -1) {
       _destroying = true;
-      platformFFI.registerGpuTexture(_sessionId!, _display, 0);
-      // sleep for a while to avoid the texture is used after it's unregistered.
-      await Future.delayed(Duration(milliseconds: 100));
+      if (unregisterTexture) {
+        platformFFI.registerGpuTexture(_sessionId!, _display, 0);
+        // sleep for a while to avoid the texture is used after it's unregistered.
+        await Future.delayed(Duration(milliseconds: 100));
+      }
       await gpuTextureRenderer.unregisterTexture(_textureId);
       _textureId = -1;
       _destroying = false;
@@ -149,40 +155,36 @@ class TextureModel {
   TextureModel(this.parent);
 
   setTextureType({required int display, required bool gpuTexture}) {
-    debugPrint("setTextureType: display:$display, isGpuTexture:$gpuTexture");
-    var texture = _control[display];
-    if (texture == null) {
-      texture = _Control();
-      _control[display] = texture;
+    debugPrint("setTextureType: display=$display, isGpuTexture=$gpuTexture");
+    ensureControl(display);
+    _control[display]?.setTextureType(gpuTexture: gpuTexture);
+    // For versions that do not support multiple displays, the display parameter is always 0, need set type of current display
+    final ffi = parent.target;
+    if (ffi == null) return;
+    if (!ffi.ffiModel.pi.isSupportMultiDisplay) {
+      final currentDisplay = CurrentDisplayState.find(ffi.id).value;
+      if (currentDisplay != display) {
+        debugPrint(
+            "setTextureType: currentDisplay=$currentDisplay, isGpuTexture=$gpuTexture");
+        ensureControl(currentDisplay);
+        _control[currentDisplay]?.setTextureType(gpuTexture: gpuTexture);
+      }
     }
-    texture.setTextureType(gpuTexture: gpuTexture);
   }
 
   setRgbaTextureId({required int display, required int id}) {
-    var ctl = _control[display];
-    if (ctl == null) {
-      ctl = _Control();
-      _control[display] = ctl;
-    }
-    ctl.setRgbaTextureId(id);
+    ensureControl(display);
+    _control[display]?.setRgbaTextureId(id);
   }
 
   setGpuTextureId({required int display, required int id}) {
-    var ctl = _control[display];
-    if (ctl == null) {
-      ctl = _Control();
-      _control[display] = ctl;
-    }
-    ctl.setGpuTextureId(id);
+    ensureControl(display);
+    _control[display]?.setGpuTextureId(id);
   }
 
   RxInt getTextureId(int display) {
-    var ctl = _control[display];
-    if (ctl == null) {
-      ctl = _Control();
-      _control[display] = ctl;
-    }
-    return ctl.textureID;
+    ensureControl(display);
+    return _control[display]!.textureID;
   }
 
   updateCurrentDisplay(int curDisplay) {
@@ -208,7 +210,7 @@ class TextureModel {
         _pixelbufferRenderTextures.remove(idx);
       }
       if (_gpuRenderTextures.containsKey(idx)) {
-        _gpuRenderTextures[idx]!.destroy(ffi);
+        _gpuRenderTextures[idx]!.destroy(true, ffi);
         _gpuRenderTextures.remove(idx);
       }
     }
@@ -235,7 +237,15 @@ class TextureModel {
       await texture.destroy(closeSession, ffi);
     }
     for (final texture in _gpuRenderTextures.values) {
-      await texture.destroy(ffi);
+      await texture.destroy(closeSession, ffi);
+    }
+  }
+
+  ensureControl(int display) {
+    var ctl = _control[display];
+    if (ctl == null) {
+      ctl = _Control();
+      _control[display] = ctl;
     }
   }
 }
