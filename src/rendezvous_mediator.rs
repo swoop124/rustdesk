@@ -21,11 +21,7 @@ use hbb_common::{
     sleep,
     socket_client::{self, connect_tcp, is_ipv4},
     tcp::FramedStream,
-    tokio::{
-        self, select,
-        sync::Mutex,
-        time::{interval, Duration},
-    },
+    tokio::{self, select, sync::Mutex, time::interval},
     udp::FramedSocket,
     AddrMangle, IntoTargetAddr, ResultType, TargetAddr,
 };
@@ -36,9 +32,6 @@ use crate::{
 };
 
 type Message = RendezvousMessage;
-
-const TIMER_OUT: Duration = Duration::from_secs(1);
-const DEFAULT_KEEP_ALIVE: i32 = 60_000;
 
 lazy_static::lazy_static! {
     static ref SOLVING_PK_MISMATCH: Arc<Mutex<String>> = Default::default();
@@ -75,7 +68,7 @@ impl RendezvousMediator {
             crate::test_nat_type();
             nat_tested = true;
         }
-        if !Config::get_option("stop-service").is_empty() {
+        if config::option2bool("stop-service", &Config::get_option("stop-service")) {
             crate::test_rendezvous_server();
         }
         let server_cloned = server.clone();
@@ -96,7 +89,7 @@ impl RendezvousMediator {
         loop {
             let conn_start_time = Instant::now();
             *SOLVING_PK_MISMATCH.lock().await = "".to_owned();
-            if Config::get_option("stop-service").is_empty()
+            if !config::option2bool("stop-service", &Config::get_option("stop-service"))
                 && !crate::platform::installing_service()
             {
                 if !nat_tested {
@@ -151,10 +144,10 @@ impl RendezvousMediator {
             addr: addr.clone(),
             host: host.clone(),
             host_prefix: Self::get_host_prefix(&host),
-            keep_alive: DEFAULT_KEEP_ALIVE,
+            keep_alive: crate::DEFAULT_KEEP_ALIVE,
         };
 
-        let mut timer = crate::rustdesk_interval(interval(TIMER_OUT));
+        let mut timer = crate::rustdesk_interval(interval(crate::TIMER_OUT));
         const MIN_REG_TIMEOUT: i64 = 3_000;
         const MAX_REG_TIMEOUT: i64 = 30_000;
         let mut reg_timeout = MIN_REG_TIMEOUT;
@@ -337,9 +330,9 @@ impl RendezvousMediator {
             addr: conn.local_addr().into_target_addr()?,
             host: host.clone(),
             host_prefix: Self::get_host_prefix(&host),
-            keep_alive: DEFAULT_KEEP_ALIVE,
+            keep_alive: crate::DEFAULT_KEEP_ALIVE,
         };
-        let mut timer = crate::rustdesk_interval(interval(TIMER_OUT));
+        let mut timer = crate::rustdesk_interval(interval(crate::TIMER_OUT));
         let mut last_register_sent: Option<Instant> = None;
         let mut last_recv_msg = Instant::now();
         // we won't support connecting to multiple rendzvous servers any more, so we can use a global variable here.
@@ -392,7 +385,10 @@ impl RendezvousMediator {
         } else {
             false
         };
-        if (cfg!(debug_assertions) && option_env!("TEST_TCP").is_some()) || is_http_proxy {
+        if (cfg!(debug_assertions) && option_env!("TEST_TCP").is_some())
+            || is_http_proxy
+            || Config::get_option(config::keys::OPTION_DISABLE_UDP) == "Y"
+        {
             Self::start_tcp(server, host).await
         } else {
             Self::start_udp(server, host).await

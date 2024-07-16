@@ -487,7 +487,19 @@ pub fn load_path<T: serde::Serialize + serde::de::DeserializeOwned + Default + s
 
 #[inline]
 pub fn store_path<T: serde::Serialize>(path: PathBuf, cfg: T) -> crate::ResultType<()> {
-    Ok(confy::store_path(path, cfg)?)
+    #[cfg(not(windows))]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        Ok(confy::store_path_perms(
+            path,
+            cfg,
+            fs::Permissions::from_mode(0o600),
+        )?)
+    }
+    #[cfg(windows)]
+    {
+        Ok(confy::store_path(path, cfg)?)
+    }
 }
 
 impl Config {
@@ -912,7 +924,7 @@ impl Config {
 
     #[inline]
     fn purify_options(v: &mut HashMap<String, String>) {
-        v.retain(|k, _| is_option_can_save(&OVERWRITE_SETTINGS, k));
+        v.retain(|k, v| is_option_can_save(&OVERWRITE_SETTINGS, k, &DEFAULT_SETTINGS, v));
     }
 
     pub fn set_options(mut v: HashMap<String, String>) {
@@ -936,7 +948,7 @@ impl Config {
     }
 
     pub fn set_option(k: String, v: String) {
-        if !is_option_can_save(&OVERWRITE_SETTINGS, &k) {
+        if !is_option_can_save(&OVERWRITE_SETTINGS, &k, &DEFAULT_SETTINGS, &v) {
             return;
         }
         let mut config = CONFIG2.write().unwrap();
@@ -1284,6 +1296,7 @@ impl PeerConfig {
             keys::OPTION_TOUCH_MODE,
             keys::OPTION_I444,
             keys::OPTION_SWAP_LEFT_RIGHT_MOUSE,
+            keys::OPTION_COLLAPSE_TOOLBAR,
         ]
         .map(|key| {
             mp.insert(key.to_owned(), UserDefaultConfig::read(key));
@@ -1449,7 +1462,7 @@ impl LocalConfig {
     }
 
     pub fn set_option(k: String, v: String) {
-        if !is_option_can_save(&OVERWRITE_LOCAL_SETTINGS, &k) {
+        if !is_option_can_save(&OVERWRITE_LOCAL_SETTINGS, &k, &DEFAULT_LOCAL_SETTINGS, &v) {
             return;
         }
         let mut config = LOCAL_CONFIG.write().unwrap();
@@ -1554,40 +1567,6 @@ impl LanPeers {
 }
 
 #[derive(Debug, Default, Serialize, Deserialize, Clone)]
-pub struct HwCodecConfig {
-    #[serde(default, deserialize_with = "deserialize_string")]
-    pub ram: String,
-    #[serde(default, deserialize_with = "deserialize_string")]
-    pub vram: String,
-}
-
-impl HwCodecConfig {
-    pub fn load() -> HwCodecConfig {
-        Config::load_::<HwCodecConfig>("_hwcodec")
-    }
-
-    pub fn store(&self) {
-        Config::store_(self, "_hwcodec");
-    }
-
-    pub fn clear() {
-        HwCodecConfig::default().store();
-    }
-
-    pub fn clear_ram() {
-        let mut c = Self::load();
-        c.ram = Default::default();
-        c.store();
-    }
-
-    pub fn clear_vram() {
-        let mut c = Self::load();
-        c.vram = Default::default();
-        c.store();
-    }
-}
-
-#[derive(Debug, Default, Serialize, Deserialize, Clone)]
 pub struct UserDefaultConfig {
     #[serde(default, deserialize_with = "deserialize_hashmap_string_string")]
     options: HashMap<String, String>,
@@ -1636,7 +1615,12 @@ impl UserDefaultConfig {
     }
 
     pub fn set(&mut self, key: String, value: String) {
-        if !is_option_can_save(&OVERWRITE_DISPLAY_SETTINGS, &key) {
+        if !is_option_can_save(
+            &OVERWRITE_DISPLAY_SETTINGS,
+            &key,
+            &DEFAULT_DISPLAY_SETTINGS,
+            &value,
+        ) {
             return;
         }
         if value.is_empty() {
@@ -1959,8 +1943,15 @@ fn get_or(
 }
 
 #[inline]
-fn is_option_can_save(overwrite: &RwLock<HashMap<String, String>>, k: &str) -> bool {
-    if overwrite.read().unwrap().contains_key(k) {
+fn is_option_can_save(
+    overwrite: &RwLock<HashMap<String, String>>,
+    k: &str,
+    defaults: &RwLock<HashMap<String, String>>,
+    v: &str,
+) -> bool {
+    if overwrite.read().unwrap().contains_key(k)
+        || defaults.read().unwrap().get(k).map_or(false, |x| x == v)
+    {
         return false;
     }
     true
@@ -2016,6 +2007,23 @@ pub fn is_disable_account() -> bool {
 #[inline]
 pub fn is_disable_installation() -> bool {
     is_some_hard_opton("disable-installation")
+}
+
+// This function must be kept the same as the one in flutter and sciter code.
+// flutter: flutter/lib/common.dart -> option2bool()
+// sciter: Does not have the function, but it should be kept the same.
+pub fn option2bool(option: &str, value: &str) -> bool {
+    if option.starts_with("enable-") {
+        value != "N"
+    } else if option.starts_with("allow-")
+        || option == "stop-service"
+        || option == keys::OPTION_DIRECT_SERVER
+        || option == "force-always-relay"
+    {
+        value == "Y"
+    } else {
+        value != "N"
+    }
 }
 
 pub mod keys {
@@ -2083,6 +2091,15 @@ pub mod keys {
     pub const OPTION_ALLOW_LINUX_HEADLESS: &str = "allow-linux-headless";
     pub const OPTION_ENABLE_HWCODEC: &str = "enable-hwcodec";
     pub const OPTION_APPROVE_MODE: &str = "approve-mode";
+    pub const OPTION_CUSTOM_RENDEZVOUS_SERVER: &str = "custom-rendezvous-server";
+    pub const OPTION_API_SERVER: &str = "api-server";
+    pub const OPTION_KEY: &str = "key";
+    pub const OPTION_PRESET_ADDRESS_BOOK_NAME: &str = "preset-address-book-name";
+    pub const OPTION_PRESET_ADDRESS_BOOK_TAG: &str = "preset-address-book-tag";
+    pub const OPTION_ENABLE_DIRECTX_CAPTURE: &str = "enable-directx-capture";
+    pub const OPTION_ENABLE_ANDROID_SOFTWARE_ENCODING_HALF_SCALE: &str =
+        "enable-android-software-encoding-half-scale";
+    pub const OPTION_DISABLE_UDP: &str = "disable-udp";
 
     // flutter local options
     pub const OPTION_FLUTTER_REMOTE_MENUBAR_STATE: &str = "remoteMenubarState";
@@ -2092,12 +2109,22 @@ pub mod keys {
     pub const OPTION_FLUTTER_PEER_TAB_VISIBLE: &str = "peer-tab-visible";
     pub const OPTION_FLUTTER_PEER_CARD_UI_TYLE: &str = "peer-card-ui-type";
     pub const OPTION_FLUTTER_CURRENT_AB_NAME: &str = "current-ab-name";
+    pub const OPTION_ALLOW_REMOTE_CM_MODIFICATION: &str = "allow-remote-cm-modification";
 
     // android floating window options
     pub const OPTION_DISABLE_FLOATING_WINDOW: &str = "disable-floating-window";
     pub const OPTION_FLOATING_WINDOW_SIZE: &str = "floating-window-size";
+    pub const OPTION_FLOATING_WINDOW_UNTOUCHABLE: &str = "floating-window-untouchable";
     pub const OPTION_FLOATING_WINDOW_TRANSPARENCY: &str = "floating-window-transparency";
     pub const OPTION_FLOATING_WINDOW_SVG: &str = "floating-window-svg";
+
+    // android keep screen on
+    pub const OPTION_KEEP_SCREEN_ON: &str = "keep-screen-on";
+
+    pub const OPTION_DISABLE_GROUP_PANEL: &str = "disable-group-panel";
+    pub const OPTION_PRE_ELEVATE_SERVICE: &str = "pre-elevate-service";
+
+    pub const OPTION_DISPLAY_NAME: &str = "display-name";
 
     // proxy settings
     // The following options are not real keys, they are just used for custom client advanced settings.
@@ -2156,8 +2183,20 @@ pub mod keys {
         OPTION_FLUTTER_CURRENT_AB_NAME,
         OPTION_DISABLE_FLOATING_WINDOW,
         OPTION_FLOATING_WINDOW_SIZE,
+        OPTION_FLOATING_WINDOW_UNTOUCHABLE,
         OPTION_FLOATING_WINDOW_TRANSPARENCY,
         OPTION_FLOATING_WINDOW_SVG,
+        OPTION_KEEP_SCREEN_ON,
+        OPTION_DISABLE_GROUP_PANEL,
+        OPTION_PRE_ELEVATE_SERVICE,
+        OPTION_DISPLAY_NAME,
+        "remove-preset-password-warning",
+        "hide-security-settings",
+        "hide-network-settings",
+        "hide-server-settings",
+        "hide-proxy-settings",
+        "hide-username-on-card",
+        OPTION_ALLOW_REMOTE_CM_MODIFICATION,
     ];
     // DEFAULT_SETTINGS, OVERWRITE_SETTINGS
     pub const KEYS_SETTINGS: &[&str] = &[
@@ -2189,7 +2228,27 @@ pub mod keys {
         OPTION_PROXY_URL,
         OPTION_PROXY_USERNAME,
         OPTION_PROXY_PASSWORD,
+        OPTION_CUSTOM_RENDEZVOUS_SERVER,
+        OPTION_API_SERVER,
+        OPTION_KEY,
+        OPTION_PRESET_ADDRESS_BOOK_NAME,
+        OPTION_PRESET_ADDRESS_BOOK_TAG,
+        OPTION_ENABLE_DIRECTX_CAPTURE,
+        OPTION_ENABLE_ANDROID_SOFTWARE_ENCODING_HALF_SCALE,
+        OPTION_DISABLE_UDP,
     ];
+}
+
+pub fn common_load<
+    T: serde::Serialize + serde::de::DeserializeOwned + Default + std::fmt::Debug,
+>(
+    suffix: &str,
+) -> T {
+    Config::load_::<T>(suffix)
+}
+
+pub fn common_store<T: serde::Serialize>(config: &T, suffix: &str) {
+    Config::store_(config, suffix);
 }
 
 #[cfg(test)]
@@ -2264,7 +2323,18 @@ mod tests {
         res.insert("c".to_owned(), "d".to_string());
         res.insert("d".to_owned(), "cc".to_string());
         Config::purify_options(&mut res);
+        DEFAULT_SETTINGS
+            .write()
+            .unwrap()
+            .insert("f".to_string(), "c".to_string());
+        Config::purify_options(&mut res);
         assert!(res.len() == 2);
+        DEFAULT_SETTINGS
+            .write()
+            .unwrap()
+            .insert("f".to_string(), "a".to_string());
+        Config::purify_options(&mut res);
+        assert!(res.len() == 1);
         let res = Config::get_options();
         assert!(res["a"] == "b");
         assert!(res["c"] == "f");
@@ -2424,6 +2494,28 @@ mod tests {
                 HashMap::from([("0".to_string(), Resolution { w: 1920, h: 1080 })]);
             let cfg = toml::from_str::<PeerConfig>(wrong_field_str);
             assert_eq!(cfg, Ok(cfg_to_compare), "Failed to test wrong_field_str");
+        }
+    }
+
+    #[test]
+    fn test_store_load() {
+        let peerconfig_id = "123456789";
+        let cfg: PeerConfig = Default::default();
+        cfg.store(&peerconfig_id);
+        assert_eq!(PeerConfig::load(&peerconfig_id), cfg);
+
+        #[cfg(not(windows))]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            assert_eq!(
+                // ignore file type information by masking with 0o777 (see https://stackoverflow.com/a/50045872)
+                fs::metadata(PeerConfig::path(&peerconfig_id))
+                    .expect("reading metadata failed")
+                    .permissions()
+                    .mode()
+                    & 0o777,
+                0o600
+            );
         }
     }
 }
