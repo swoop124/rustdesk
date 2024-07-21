@@ -1062,7 +1062,7 @@ void msgBox(SessionID sessionId, String type, String title, String text,
   bool hasOk = false;
   submit() {
     dialogManager.dismissAll();
-    // https://github.com/fufesou/rustdesk/blob/5e9a31340b899822090a3731769ae79c6bf5f3e5/src/ui/common.tis#L263
+    // https://github.com/rustdesk/rustdesk/blob/5e9a31340b899822090a3731769ae79c6bf5f3e5/src/ui/common.tis#L263
     if (!type.contains("custom") && desktopType != DesktopType.portForward) {
       closeConnection();
     }
@@ -1096,21 +1096,33 @@ void msgBox(SessionID sessionId, String type, String title, String text,
           dialogManager.dismissAll();
         }));
   }
-  if (reconnect != null &&
-      title == "Connection Error" &&
-      reconnectTimeout != null) {
+  if (reconnect != null && title == "Connection Error") {
     // `enabled` is used to disable the dialog button once the button is clicked.
     final enabled = true.obs;
-    final button = Obx(() => _ReconnectCountDownButton(
-          second: reconnectTimeout,
-          onPressed: enabled.isTrue
-              ? () {
-                  // Disable the button
-                  enabled.value = false;
-                  reconnect(dialogManager, sessionId, false);
-                }
-              : null,
-        ));
+    final button = reconnectTimeout != null
+        ? Obx(() => _ReconnectCountDownButton(
+              second: reconnectTimeout,
+              onPressed: enabled.isTrue
+                  ? () {
+                      // Disable the button
+                      enabled.value = false;
+                      reconnect(dialogManager, sessionId, false);
+                    }
+                  : null,
+            ))
+        : Obx(
+            () => dialogButton(
+              'Reconnect',
+              isOutline: true,
+              onPressed: enabled.isTrue
+                  ? () {
+                      // Disable the button
+                      enabled.value = false;
+                      reconnect(dialogManager, sessionId, false);
+                    }
+                  : null,
+            ),
+          );
     buttons.insert(0, button);
   }
   if (link.isNotEmpty) {
@@ -3307,8 +3319,9 @@ Widget buildPresetPasswordWarning() {
         return Text(
             'Error: ${snapshot.error}'); // Show an error message if the Future completed with an error
       } else if (snapshot.hasData && snapshot.data == true) {
-        if (bind.mainGetLocalOption(key: "remove-preset-password-warning") ==
-            'Y') {
+        if (bind.mainGetBuildinOption(
+                key: kOptionRemovePresetPasswordWarning) !=
+            'N') {
           return SizedBox.shrink();
         }
         return Container(
