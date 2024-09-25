@@ -1,14 +1,7 @@
-use std::{
-    collections::HashMap,
-    ffi::c_void,
-    net::SocketAddr,
-    ops::Deref,
-    str::FromStr,
-    sync::{mpsc, Arc, Mutex, RwLock},
-};
-
 use async_trait::async_trait;
 use bytes::Bytes;
+#[cfg(not(any(target_os = "android", target_os = "ios")))]
+use clipboard_master::{CallbackResult, ClipboardHandler};
 #[cfg(not(any(target_os = "android", target_os = "linux")))]
 use cpal::{
     traits::{DeviceTrait, HostTrait, StreamTrait},
@@ -19,6 +12,18 @@ use magnum_opus::{Channels::*, Decoder as AudioDecoder};
 #[cfg(not(any(target_os = "android", target_os = "linux")))]
 use ringbuf::{ring_buffer::RbBase, Rb};
 use sha2::{Digest, Sha256};
+use std::{
+    collections::HashMap,
+    ffi::c_void,
+    io,
+    net::SocketAddr,
+    ops::Deref,
+    str::FromStr,
+    sync::{
+        mpsc::{self, RecvTimeoutError, Sender},
+        Arc, Mutex, RwLock,
+    },
+};
 use uuid::Uuid;
 
 pub use file_trait::FileManager;
@@ -60,12 +65,12 @@ use crate::{
     check_port,
     common::input::{MOUSE_BUTTON_LEFT, MOUSE_BUTTON_RIGHT, MOUSE_TYPE_DOWN, MOUSE_TYPE_UP},
     create_symmetric_key_msg, decode_id_pk, get_rs_pk, is_keyboard_mode_supported, secure_tcp,
-    ui_interface::{get_buildin_option, use_texture_render},
+    ui_interface::{get_builtin_option, use_texture_render},
     ui_session_interface::{InvokeUiSession, Session},
 };
 
 #[cfg(not(any(target_os = "android", target_os = "ios")))]
-use crate::clipboard::{check_clipboard, CLIPBOARD_INTERVAL};
+use crate::clipboard::{check_clipboard, ClipboardSide, CLIPBOARD_INTERVAL};
 #[cfg(not(feature = "flutter"))]
 #[cfg(not(any(target_os = "android", target_os = "ios")))]
 use crate::ui_session_interface::SessionPermissionConfig;
@@ -79,7 +84,7 @@ pub mod io_loop;
 pub const MILLI1: Duration = Duration::from_millis(1);
 pub const SEC30: Duration = Duration::from_secs(30);
 pub const VIDEO_QUEUE_SIZE: usize = 120;
-const MAX_DECODE_FAIL_COUNTER: usize = 10; // Currently, failed decode cause refresh_video, so make it small
+const MAX_DECODE_FAIL_COUNTER: usize = 3;
 
 #[cfg(target_os = "linux")]
 pub const LOGIN_MSG_DESKTOP_NOT_INITED: &str = "Desktop env is not inited";
@@ -107,6 +112,9 @@ pub const SCRAP_OTHER_VERSION_OR_X11_REQUIRED: &str =
     "Wayland requires higher version of linux distro. Please try X11 desktop or change your OS.";
 pub const SCRAP_X11_REQUIRED: &str = "x11 expected";
 pub const SCRAP_X11_REF_URL: &str = "https://rustdesk.com/docs/en/manual/linux/#x11-required";
+
+#[cfg(not(any(target_os = "android", target_os = "linux")))]
+pub const AUDIO_BUFFER_MS: usize = 150;
 
 #[cfg(feature = "flutter")]
 #[cfg(not(any(target_os = "android", target_os = "ios")))]
@@ -136,17 +144,10 @@ lazy_static::lazy_static! {
 #[cfg(not(any(target_os = "android", target_os = "ios")))]
 lazy_static::lazy_static! {
     static ref ENIGO: Arc<Mutex<enigo::Enigo>> = Arc::new(Mutex::new(enigo::Enigo::new()));
-    static ref OLD_CLIPBOARD_DATA: Arc<Mutex<crate::clipboard::ClipboardData>> = Default::default();
     static ref TEXT_CLIPBOARD_STATE: Arc<Mutex<TextClipboardState>> = Arc::new(Mutex::new(TextClipboardState::new()));
 }
 
 const PUBLIC_SERVER: &str = "public";
-
-#[inline]
-#[cfg(not(any(target_os = "android", target_os = "ios")))]
-pub fn get_old_clipboard_text() -> Arc<Mutex<crate::clipboard::ClipboardData>> {
-    OLD_CLIPBOARD_DATA.clone()
-}
 
 #[cfg(not(any(target_os = "android", target_os = "ios")))]
 pub fn get_key_state(key: enigo::Key) -> bool {
@@ -714,6 +715,13 @@ impl Client {
 
     #[cfg(not(any(target_os = "android", target_os = "ios")))]
     fn try_stop_clipboard() {
+        // There's a bug here.
+        // If session is closed by the peer, `has_sessions_running()` will always return true.
+        // It's better to check if the active session number.
+        // But it's not a problem, because the clipboard thread does not consume CPU.
+        //
+        // If we want to fix it, we can add a flag to indicate if session is active.
+        // But I think it's not necessary to introduce complexity at this point.
         #[cfg(feature = "flutter")]
         if crate::flutter::sessions::has_sessions_running(ConnType::DEFAULT_CONN) {
             return;
@@ -727,18 +735,44 @@ impl Client {
     //
     // If clipboard update is detected, the text will be sent to all sessions by `send_text_clipboard_msg`.
     #[cfg(not(any(target_os = "android", target_os = "ios")))]
-    fn try_start_clipboard(_ctx: Option<ClientClipboardContext>) -> Option<UnboundedReceiver<()>> {
+    fn try_start_clipboard(
+        _client_clip_ctx: Option<ClientClipboardContext>,
+    ) -> Option<UnboundedReceiver<()>> {
         let mut clipboard_lock = TEXT_CLIPBOARD_STATE.lock().unwrap();
         if clipboard_lock.running {
             return None;
         }
+
+        let (tx_cb_result, rx_cb_result) = mpsc::channel();
+        let handler = ClientClipboardHandler {
+            ctx: None,
+            tx_cb_result,
+            #[cfg(not(feature = "flutter"))]
+            client_clip_ctx: _client_clip_ctx,
+        };
+
+        let (tx_start_res, rx_start_res) = mpsc::channel();
+        let h = crate::clipboard::start_clipbard_master_thread(handler, tx_start_res);
+        let shutdown = match rx_start_res.recv() {
+            Ok((Some(s), _)) => s,
+            Ok((None, err)) => {
+                log::error!("{}", err);
+                return None;
+            }
+            Err(e) => {
+                log::error!("Failed to create clipboard listener: {}", e);
+                return None;
+            }
+        };
+
         clipboard_lock.running = true;
-        let (tx, rx) = unbounded_channel();
+
+        let (tx_started, rx_started) = unbounded_channel();
 
         log::info!("Start text clipboard loop");
         std::thread::spawn(move || {
             let mut is_sent = false;
-            let mut ctx = None;
+
             loop {
                 if !TEXT_CLIPBOARD_STATE.lock().unwrap().running {
                     break;
@@ -748,39 +782,31 @@ impl Client {
                     continue;
                 }
 
-                if let Some(msg) = check_clipboard(&mut ctx, Some(OLD_CLIPBOARD_DATA.clone())) {
-                    #[cfg(feature = "flutter")]
-                    crate::flutter::send_text_clipboard_msg(msg);
-                    #[cfg(not(feature = "flutter"))]
-                    if let Some(ctx) = &_ctx {
-                        if ctx.cfg.is_text_clipboard_required() {
-                            let _ = ctx.tx.send(Data::Message(msg));
-                        }
-                    }
-                }
-
                 if !is_sent {
                     is_sent = true;
-                    tx.send(()).ok();
+                    tx_started.send(()).ok();
                 }
 
-                std::thread::sleep(Duration::from_millis(CLIPBOARD_INTERVAL));
+                match rx_cb_result.recv_timeout(Duration::from_millis(CLIPBOARD_INTERVAL)) {
+                    Ok(CallbackResult::Stop) => {
+                        log::debug!("Clipboard listener stopped");
+                        break;
+                    }
+                    Ok(CallbackResult::StopWithError(err)) => {
+                        log::error!("Clipboard listener stopped with error: {}", err);
+                        break;
+                    }
+                    Err(RecvTimeoutError::Timeout) => {}
+                    _ => {}
+                }
             }
             log::info!("Stop text clipboard loop");
+            shutdown.signal();
+            h.join().ok();
+            TEXT_CLIPBOARD_STATE.lock().unwrap().running = false;
         });
 
-        Some(rx)
-    }
-
-    #[inline]
-    #[cfg(not(any(target_os = "android", target_os = "ios")))]
-    fn get_current_clipboard_msg() -> Option<Message> {
-        let data = &*OLD_CLIPBOARD_DATA.lock().unwrap();
-        if data.is_empty() {
-            None
-        } else {
-            Some(data.create_msg())
-        }
+        Some(rx_started)
     }
 }
 
@@ -791,6 +817,65 @@ impl TextClipboardState {
             is_required: true,
             running: false,
         }
+    }
+}
+
+#[cfg(not(any(target_os = "android", target_os = "ios")))]
+struct ClientClipboardHandler {
+    ctx: Option<crate::clipboard::ClipboardContext>,
+    tx_cb_result: Sender<CallbackResult>,
+    #[cfg(not(feature = "flutter"))]
+    client_clip_ctx: Option<ClientClipboardContext>,
+}
+
+#[cfg(not(any(target_os = "android", target_os = "ios")))]
+impl ClientClipboardHandler {
+    #[inline]
+    #[cfg(feature = "flutter")]
+    fn send_msg(&self, msg: Message) {
+        crate::flutter::send_text_clipboard_msg(msg);
+    }
+
+    #[cfg(not(feature = "flutter"))]
+    fn send_msg(&self, msg: Message) {
+        if let Some(ctx) = &self.client_clip_ctx {
+            if ctx.cfg.is_text_clipboard_required() {
+                if let Some(pi) = ctx.cfg.lc.read().unwrap().peer_info.as_ref() {
+                    if let Some(message::Union::MultiClipboards(multi_clipboards)) = &msg.union {
+                        if let Some(msg_out) = crate::clipboard::get_msg_if_not_support_multi_clip(
+                            &pi.version,
+                            &pi.platform,
+                            multi_clipboards,
+                        ) {
+                            let _ = ctx.tx.send(Data::Message(msg_out));
+                            return;
+                        }
+                    }
+                }
+                let _ = ctx.tx.send(Data::Message(msg));
+            }
+        }
+    }
+}
+
+#[cfg(not(any(target_os = "android", target_os = "ios")))]
+impl ClipboardHandler for ClientClipboardHandler {
+    fn on_clipboard_change(&mut self) -> CallbackResult {
+        if TEXT_CLIPBOARD_STATE.lock().unwrap().running
+            && TEXT_CLIPBOARD_STATE.lock().unwrap().is_required
+        {
+            if let Some(msg) = check_clipboard(&mut self.ctx, ClipboardSide::Client, false) {
+                self.send_msg(msg);
+            }
+        }
+        CallbackResult::Next
+    }
+
+    fn on_clipboard_error(&mut self, error: io::Error) -> CallbackResult {
+        self.tx_cb_result
+            .send(CallbackResult::StopWithError(error))
+            .ok();
+        CallbackResult::Next
     }
 }
 
@@ -821,8 +906,30 @@ struct AudioBuffer(pub Arc<std::sync::Mutex<ringbuf::HeapRb<f32>>>);
 impl Default for AudioBuffer {
     fn default() -> Self {
         Self(Arc::new(std::sync::Mutex::new(
-            ringbuf::HeapRb::<f32>::new(48000 * 2), // 48000hz, 2 channel, 1 second
+            ringbuf::HeapRb::<f32>::new(48000 * 2 * AUDIO_BUFFER_MS / 1000), // 48000hz, 2 channel
         )))
+    }
+}
+
+#[cfg(not(any(target_os = "android", target_os = "linux")))]
+impl AudioBuffer {
+    pub fn resize(&self, sample_rate: usize, channels: usize) {
+        let capacity = sample_rate * channels * AUDIO_BUFFER_MS / 1000;
+        let old_capacity = self.0.lock().unwrap().capacity();
+        if capacity != old_capacity {
+            *self.0.lock().unwrap() = ringbuf::HeapRb::<f32>::new(capacity);
+            log::info!("Audio buffer resized from {old_capacity} to {capacity}");
+        }
+    }
+
+    // clear when full to avoid long time noise
+    #[inline]
+    pub fn clear_if_full(&self) {
+        let full = self.0.lock().unwrap().is_full();
+        if full {
+            self.0.lock().unwrap().clear();
+            log::trace!("Audio buffer cleared");
+        }
     }
 }
 
@@ -970,6 +1077,7 @@ impl AudioHandler {
                             self.device_channel,
                         );
                     }
+                    self.audio_buffer.clear_if_full();
                     audio_buffer.lock().unwrap().push_slice_overwrite(&buffer);
                 }
                 #[cfg(target_os = "android")]
@@ -998,6 +1106,8 @@ impl AudioHandler {
             // too many errors, will improve later
             log::trace!("an error occurred on stream: {}", err);
         };
+        self.audio_buffer
+            .resize(config.sample_rate.0 as _, config.channels as _);
         let audio_buffer = self.audio_buffer.0.clone();
         let ready = self.ready.clone();
         let timeout = None;
@@ -1041,6 +1151,7 @@ pub struct VideoHandler {
     record: bool,
     _display: usize, // useful for debug
     fail_counter: usize,
+    first_frame: bool,
 }
 
 impl VideoHandler {
@@ -1066,6 +1177,7 @@ impl VideoHandler {
             record: false,
             _display,
             fail_counter: 0,
+            first_frame: true,
         }
     }
 
@@ -1094,9 +1206,19 @@ impl VideoHandler {
                     self.fail_counter = 0;
                 } else {
                     if self.fail_counter < usize::MAX {
-                        self.fail_counter += 1
+                        if self.first_frame && self.fail_counter < MAX_DECODE_FAIL_COUNTER {
+                            log::error!("decode first frame failed");
+                            self.fail_counter = MAX_DECODE_FAIL_COUNTER;
+                        } else {
+                            self.fail_counter += 1;
+                        }
+                        log::error!(
+                            "Failed to handle video frame, fail counter: {}",
+                            self.fail_counter
+                        );
                     }
                 }
+                self.first_frame = false;
                 if self.record {
                     self.recorder
                         .lock()
@@ -1112,12 +1234,17 @@ impl VideoHandler {
 
     /// Reset the decoder, change format if it is Some
     pub fn reset(&mut self, format: Option<CodecFormat>) {
+        log::info!(
+            "reset video handler for display #{}, format: {format:?}",
+            self._display
+        );
         #[cfg(target_os = "macos")]
         self.rgb.set_align(crate::get_dst_align_rgba());
         let luid = Self::get_adapter_luid();
         let format = format.unwrap_or(self.decoder.format());
         self.decoder = Decoder::new(format, luid);
         self.fail_counter = 0;
+        self.first_frame = true;
     }
 
     /// Start or stop screen record.
@@ -1219,6 +1346,7 @@ pub struct LoginConfigHandler {
     pub peer_info: Option<PeerInfo>,
     password_source: PasswordSource, // where the sent password comes from
     shared_password: Option<String>, // Store the shared password
+    pub enable_trusted_devices: bool,
 }
 
 impl Deref for LoginConfigHandler {
@@ -1672,28 +1800,6 @@ impl LoginConfigHandler {
         )
     }
 
-    pub fn get_option_message_after_login(&self) -> Option<OptionMessage> {
-        if self.conn_type.eq(&ConnType::FILE_TRANSFER)
-            || self.conn_type.eq(&ConnType::PORT_FORWARD)
-            || self.conn_type.eq(&ConnType::RDP)
-        {
-            return None;
-        }
-        let mut n = 0;
-        let mut msg = OptionMessage::new();
-        if self.version < hbb_common::get_version_number("1.2.4") {
-            if self.get_toggle_option("privacy-mode") {
-                msg.privacy_mode = BoolOption::Yes.into();
-                n += 1;
-            }
-        }
-        if n > 0 {
-            Some(msg)
-        } else {
-            None
-        }
-    }
-
     /// Parse the image quality option.
     /// Return [`ImageQuality`] if the option is valid, otherwise return `None`.
     ///
@@ -2027,15 +2133,36 @@ impl LoginConfigHandler {
         } else {
             (my_id, self.id.clone())
         };
-        let mut display_name = get_buildin_option(config::keys::OPTION_DISPLAY_NAME);
+        let mut display_name = get_builtin_option(config::keys::OPTION_DISPLAY_NAME);
+        if display_name.is_empty() {
+            display_name =
+                serde_json::from_str::<serde_json::Value>(&LocalConfig::get_option("user_info"))
+                    .map(|x| {
+                        x.get("name")
+                            .map(|x| x.as_str().unwrap_or_default())
+                            .unwrap_or_default()
+                            .to_owned()
+                    })
+                    .unwrap_or_default();
+        }
         if display_name.is_empty() {
             display_name = crate::username();
         }
+        #[cfg(not(target_os = "android"))]
+        let my_platform = whoami::platform().to_string();
+        #[cfg(target_os = "android")]
+        let my_platform = "Android".into();
+        let hwid = if self.get_option("trust-this-device") == "Y" {
+            crate::get_hwid()
+        } else {
+            Bytes::new()
+        };
         let mut lr = LoginRequest {
             username: pure_id,
             password: password.into(),
             my_id,
             my_name: display_name,
+            my_platform,
             option: self.get_option_message(true).into(),
             session_id: self.session_id,
             version: crate::VERSION.to_string(),
@@ -2045,6 +2172,7 @@ impl LoginConfigHandler {
                 ..Default::default()
             })
             .into(),
+            hwid,
             ..Default::default()
         };
         match self.conn_type {
@@ -2701,6 +2829,12 @@ pub fn handle_login_error(
         interface.msgbox("re-input-password", err, "Do you want to enter again?", "");
         true
     } else if err == LOGIN_MSG_2FA_WRONG || err == REQUIRE_2FA {
+        let enabled = lc.read().unwrap().get_option("trust-this-device") == "Y";
+        if enabled {
+            lc.write()
+                .unwrap()
+                .set_option("trust-this-device".to_string(), "".to_string());
+        }
         interface.msgbox("input-2fa", err, "", "");
         true
     } else if LOGIN_ERROR_MAP.contains_key(err) {
@@ -2794,7 +2928,7 @@ pub async fn handle_hash(
 
     if password.is_empty() {
         let p =
-            crate::ui_interface::get_buildin_option(config::keys::OPTION_DEFAULT_CONNECT_PASSWORD);
+            crate::ui_interface::get_builtin_option(config::keys::OPTION_DEFAULT_CONNECT_PASSWORD);
         if !p.is_empty() {
             let mut hasher = Sha256::new();
             hasher.update(p.clone());
@@ -3041,6 +3175,7 @@ pub enum Data {
     NewVoiceCall,
     CloseVoiceCall,
     ResetDecoder(Option<usize>),
+    RenameFile((i32, String, String, bool)),
 }
 
 /// Keycode for key events.
@@ -3266,4 +3401,136 @@ async fn hc_connection_(
         }
     }
     Ok(())
+}
+
+pub mod peer_online {
+    use hbb_common::{
+        anyhow::bail,
+        config::{Config, CONNECT_TIMEOUT, READ_TIMEOUT},
+        log,
+        rendezvous_proto::*,
+        sleep,
+        socket_client::connect_tcp,
+        tcp::FramedStream,
+        ResultType,
+    };
+
+    pub async fn query_online_states<F: FnOnce(Vec<String>, Vec<String>)>(ids: Vec<String>, f: F) {
+        let test = false;
+        if test {
+            sleep(1.5).await;
+            let mut onlines = ids;
+            let offlines = onlines.drain((onlines.len() / 2)..).collect();
+            f(onlines, offlines)
+        } else {
+            let query_timeout = std::time::Duration::from_millis(3_000);
+            match query_online_states_(&ids, query_timeout).await {
+                Ok((onlines, offlines)) => {
+                    f(onlines, offlines);
+                }
+                Err(e) => {
+                    log::debug!("query onlines, {}", &e);
+                }
+            }
+        }
+    }
+
+    async fn create_online_stream() -> ResultType<FramedStream> {
+        let (rendezvous_server, _servers, _contained) =
+            crate::get_rendezvous_server(READ_TIMEOUT).await;
+        let tmp: Vec<&str> = rendezvous_server.split(":").collect();
+        if tmp.len() != 2 {
+            bail!("Invalid server address: {}", rendezvous_server);
+        }
+        let port: u16 = tmp[1].parse()?;
+        if port == 0 {
+            bail!("Invalid server address: {}", rendezvous_server);
+        }
+        let online_server = format!("{}:{}", tmp[0], port - 1);
+        connect_tcp(online_server, CONNECT_TIMEOUT).await
+    }
+
+    async fn query_online_states_(
+        ids: &Vec<String>,
+        timeout: std::time::Duration,
+    ) -> ResultType<(Vec<String>, Vec<String>)> {
+        let mut msg_out = RendezvousMessage::new();
+        msg_out.set_online_request(OnlineRequest {
+            id: Config::get_id(),
+            peers: ids.clone(),
+            ..Default::default()
+        });
+
+        let mut socket = match create_online_stream().await {
+            Ok(s) => s,
+            Err(e) => {
+                log::debug!("Failed to create peers online stream, {e}");
+                return Ok((vec![], ids.clone()));
+            }
+        };
+        // TODO: Use long connections to avoid socket creation
+        // If we use a Arc<Mutex<Option<FramedStream>>> to hold and reuse the previous socket,
+        // we may face the following error:
+        // An established connection was aborted by the software in your host machine. (os error 10053)
+        if let Err(e) = socket.send(&msg_out).await {
+            log::debug!("Failed to send peers online states query, {e}");
+            return Ok((vec![], ids.clone()));
+        }
+        // Retry for 2 times to get the online response
+        for _ in 0..2 {
+            if let Some(msg_in) = crate::common::get_next_nonkeyexchange_msg(
+                &mut socket,
+                Some(timeout.as_millis() as _),
+            )
+            .await
+            {
+                match msg_in.union {
+                    Some(rendezvous_message::Union::OnlineResponse(online_response)) => {
+                        let states = online_response.states;
+                        let mut onlines = Vec::new();
+                        let mut offlines = Vec::new();
+                        for i in 0..ids.len() {
+                            // bytes index from left to right
+                            let bit_value = 0x01 << (7 - i % 8);
+                            if (states[i / 8] & bit_value) == bit_value {
+                                onlines.push(ids[i].clone());
+                            } else {
+                                offlines.push(ids[i].clone());
+                            }
+                        }
+                        return Ok((onlines, offlines));
+                    }
+                    _ => {
+                        // ignore
+                    }
+                }
+            } else {
+                // TODO: Make sure socket closed?
+                bail!("Online stream receives None");
+            }
+        }
+
+        bail!("Failed to query online states, no online response");
+    }
+
+    #[cfg(test)]
+    mod tests {
+        use hbb_common::tokio;
+
+        #[tokio::test]
+        async fn test_query_onlines() {
+            super::query_online_states(
+                vec![
+                    "152183996".to_owned(),
+                    "165782066".to_owned(),
+                    "155323351".to_owned(),
+                    "460952777".to_owned(),
+                ],
+                |onlines: Vec<String>, offlines: Vec<String>| {
+                    println!("onlines: {:?}, offlines: {:?}", &onlines, &offlines);
+                },
+            )
+            .await;
+        }
+    }
 }

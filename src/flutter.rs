@@ -802,13 +802,13 @@ impl InvokeUiSession for FlutterHandler {
 
     fn set_peer_info(&self, pi: &PeerInfo) {
         let displays = Self::make_displays_msg(&pi.displays);
-        let mut features: HashMap<&str, i32> = Default::default();
+        let mut features: HashMap<&str, bool> = Default::default();
         for ref f in pi.features.iter() {
-            features.insert("privacy_mode", if f.privacy_mode { 1 } else { 0 });
+            features.insert("privacy_mode", f.privacy_mode);
         }
         // compatible with 1.1.9
         if get_version_number(&pi.version) < get_version_number("1.2.0") {
-            features.insert("privacy_mode", 0);
+            features.insert("privacy_mode", false);
         }
         let features = serde_json::ser::to_string(&features).unwrap_or("".to_owned());
         let resolutions = serialize_resolutions(&pi.resolutions.resolutions);
@@ -1256,6 +1256,19 @@ pub fn update_text_clipboard_required() {
 pub fn send_text_clipboard_msg(msg: Message) {
     for s in sessions::get_sessions() {
         if s.is_text_clipboard_required() {
+            // Check if the client supports multi clipboards
+            if let Some(message::Union::MultiClipboards(multi_clipboards)) = &msg.union {
+                let version = s.ui_handler.peer_info.read().unwrap().version.clone();
+                let platform = s.ui_handler.peer_info.read().unwrap().platform.clone();
+                if let Some(msg_out) = crate::clipboard::get_msg_if_not_support_multi_clip(
+                    &version,
+                    &platform,
+                    multi_clipboards,
+                ) {
+                    s.send(Data::Message(msg_out));
+                    continue;
+                }
+            }
             s.send(Data::Message(msg.clone()));
         }
     }
@@ -1767,6 +1780,54 @@ pub fn try_sync_peer_option(
     }
 }
 
+pub(super) fn session_update_virtual_display(session: &FlutterSession, index: i32, on: bool) {
+    let virtual_display_key = "virtual-display";
+    let displays = session.get_option(virtual_display_key.to_owned());
+    if !on {
+        if index == -1 {
+            if !displays.is_empty() {
+                session.set_option(virtual_display_key.to_owned(), "".to_owned());
+            }
+        } else {
+            let mut vdisplays = displays.split(',').collect::<Vec<_>>();
+            let len = vdisplays.len();
+            if index == 0 {
+                // 0 means we cann't toggle the virtual display by index.
+                vdisplays.remove(vdisplays.len() - 1);
+            } else {
+                if let Some(i) = vdisplays.iter().position(|&x| x == index.to_string()) {
+                    vdisplays.remove(i);
+                }
+            }
+            if vdisplays.len() != len {
+                session.set_option(
+                    virtual_display_key.to_owned(),
+                    vdisplays.join(",").to_owned(),
+                );
+            }
+        }
+    } else {
+        let mut vdisplays = displays
+            .split(',')
+            .map(|x| x.to_string())
+            .collect::<Vec<_>>();
+        let len = vdisplays.len();
+        if index == 0 {
+            vdisplays.push(index.to_string());
+        } else {
+            if !vdisplays.iter().any(|x| *x == index.to_string()) {
+                vdisplays.push(index.to_string());
+            }
+        }
+        if vdisplays.len() != len {
+            session.set_option(
+                virtual_display_key.to_owned(),
+                vdisplays.join(",").to_owned(),
+            );
+        }
+    }
+}
+
 // sessions mod is used to avoid the big lock of sessions' map.
 pub mod sessions {
     use std::collections::HashSet;
@@ -1996,18 +2057,18 @@ pub mod sessions {
 pub(super) mod async_tasks {
     use hbb_common::{
         bail,
-        tokio::{
-            self, select,
-            sync::mpsc::{unbounded_channel, UnboundedSender},
-        },
+        tokio::{self, select},
         ResultType,
     };
     use std::{
         collections::HashMap,
-        sync::{Arc, Mutex},
+        sync::{
+            mpsc::{sync_channel, SyncSender},
+            Arc, Mutex,
+        },
     };
 
-    type TxQueryOnlines = UnboundedSender<Vec<String>>;
+    type TxQueryOnlines = SyncSender<Vec<String>>;
     lazy_static::lazy_static! {
         static ref TX_QUERY_ONLINES: Arc<Mutex<Option<TxQueryOnlines>>> = Default::default();
     }
@@ -2024,21 +2085,18 @@ pub(super) mod async_tasks {
 
     #[tokio::main(flavor = "current_thread")]
     async fn start_flutter_async_runner_() {
-        let (tx_onlines, mut rx_onlines) = unbounded_channel::<Vec<String>>();
+        // Only one task is allowed to run at the same time.
+        let (tx_onlines, rx_onlines) = sync_channel::<Vec<String>>(1);
         TX_QUERY_ONLINES.lock().unwrap().replace(tx_onlines);
 
         loop {
-            select! {
-                ids = rx_onlines.recv() => {
-                    match ids {
-                        Some(_ids) => {
-                            #[cfg(not(any(target_os = "ios")))]
-                            crate::rendezvous_mediator::query_online_states(_ids, handle_query_onlines).await
-                        }
-                        None => {
-                            break;
-                        }
-                    }
+            match rx_onlines.recv() {
+                Ok(ids) => {
+                    crate::client::peer_online::query_online_states(ids, handle_query_onlines).await
+                }
+                _ => {
+                    // unreachable!
+                    break;
                 }
             }
         }
@@ -2046,7 +2104,8 @@ pub(super) mod async_tasks {
 
     pub fn query_onlines(ids: Vec<String>) -> ResultType<()> {
         if let Some(tx) = TX_QUERY_ONLINES.lock().unwrap().as_ref() {
-            let _ = tx.send(ids)?;
+            // Ignore if the channel is full.
+            let _ = tx.try_send(ids)?;
         } else {
             bail!("No tx_query_onlines");
         }

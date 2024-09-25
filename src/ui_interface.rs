@@ -206,13 +206,8 @@ pub fn get_hard_option(key: String) -> String {
 }
 
 #[inline]
-pub fn get_buildin_option(key: &str) -> String {
-    config::BUILDIN_SETTINGS
-        .read()
-        .unwrap()
-        .get(key)
-        .cloned()
-        .unwrap_or_default()
+pub fn get_builtin_option(key: &str) -> String {
+    crate::get_builtin_option(key)
 }
 
 #[inline]
@@ -424,6 +419,14 @@ pub fn install_path() -> String {
     return crate::platform::windows::get_install_info().1;
     #[cfg(not(windows))]
     return "".to_owned();
+}
+
+#[inline]
+pub fn install_options() -> String {
+    #[cfg(windows)]
+    return crate::platform::windows::get_install_options();
+    #[cfg(not(windows))]
+    return "{}".to_owned();
 }
 
 #[inline]
@@ -684,7 +687,6 @@ pub fn create_shortcut(_id: String) {
 #[cfg(any(target_os = "android", target_os = "ios", feature = "flutter"))]
 #[inline]
 pub fn discover() {
-    #[cfg(not(any(target_os = "ios")))]
     std::thread::spawn(move || {
         allow_err!(crate::lan::discover());
     });
@@ -781,6 +783,7 @@ pub fn http_request(url: String, method: String, body: Option<String>, header: S
         current_request.lock().unwrap().insert(url, res);
     });
 }
+
 #[inline]
 pub fn get_async_http_status(url: String) -> Option<String> {
     match ASYNC_HTTP_STATUS.lock().unwrap().get(&url) {
@@ -1130,6 +1133,7 @@ async fn check_connect_status_(reconnect: bool, rx: mpsc::UnboundedReceiver<ipc:
         )
     ))]
     let mut enable_file_transfer = "".to_owned();
+    let is_cm = crate::common::is_cm();
 
     loop {
         if let Ok(mut c) = ipc::connect(1000, "").await {
@@ -1140,6 +1144,9 @@ async fn check_connect_status_(reconnect: bool, rx: mpsc::UnboundedReceiver<ipc:
                         match res {
                             Err(err) => {
                                 log::error!("ipc connection closed: {}", err);
+                                if is_cm {
+                                    crate::ui_cm_interface::quit_cm();
+                                }
                                 break;
                             }
                             #[cfg(not(any(target_os = "android", target_os = "ios")))]
@@ -1442,4 +1449,53 @@ pub fn check_hwcodec() {
             }
         })
     }
+}
+
+#[cfg(feature = "flutter")]
+pub fn get_unlock_pin() -> String {
+    #[cfg(any(target_os = "android", target_os = "ios"))]
+    return String::default();
+    #[cfg(not(any(target_os = "android", target_os = "ios")))]
+    return ipc::get_unlock_pin();
+}
+
+#[cfg(feature = "flutter")]
+pub fn set_unlock_pin(pin: String) -> String {
+    #[cfg(any(target_os = "android", target_os = "ios"))]
+    return String::default();
+    #[cfg(not(any(target_os = "android", target_os = "ios")))]
+    match ipc::set_unlock_pin(pin, true) {
+        Ok(_) => String::default(),
+        Err(err) => err.to_string(),
+    }
+}
+
+#[cfg(feature = "flutter")]
+pub fn get_trusted_devices() -> String {
+    #[cfg(any(target_os = "android", target_os = "ios"))]
+    return Config::get_trusted_devices_json();
+    #[cfg(not(any(target_os = "android", target_os = "ios")))]
+    return ipc::get_trusted_devices();
+}
+
+#[cfg(feature = "flutter")]
+pub fn remove_trusted_devices(json: &str) {
+    let hwids = serde_json::from_str::<Vec<Bytes>>(json).unwrap_or_default();
+    #[cfg(any(target_os = "android", target_os = "ios"))]
+    Config::remove_trusted_devices(&hwids);
+    #[cfg(not(any(target_os = "android", target_os = "ios")))]
+    ipc::remove_trusted_devices(hwids);
+}
+
+#[cfg(feature = "flutter")]
+pub fn clear_trusted_devices() {
+    #[cfg(any(target_os = "android", target_os = "ios"))]
+    Config::clear_trusted_devices();
+    #[cfg(not(any(target_os = "android", target_os = "ios")))]
+    ipc::clear_trusted_devices();
+}
+
+#[cfg(feature = "flutter")]
+pub fn max_encrypt_len() -> usize {
+    hbb_common::config::ENCRYPT_MAX_LEN
 }

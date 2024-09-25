@@ -50,6 +50,9 @@ final isLinux = isLinux_;
 final isDesktop = isDesktop_;
 final isWeb = isWeb_;
 final isWebDesktop = isWebDesktop_;
+final isWebOnWindows = isWebOnWindows_;
+final isWebOnLinux = isWebOnLinux_;
+final isWebOnMacOs = isWebOnMacOS_;
 var isMobile = isAndroid || isIOS;
 var version = '';
 int androidVersion = 0;
@@ -347,6 +350,9 @@ class MyTheme {
     hoverColor: Color.fromARGB(255, 224, 224, 224),
     scaffoldBackgroundColor: Colors.white,
     dialogBackgroundColor: Colors.white,
+    appBarTheme: AppBarTheme(
+      shadowColor: Colors.transparent,
+    ),
     dialogTheme: DialogTheme(
       elevation: 15,
       shape: RoundedRectangleBorder(
@@ -442,6 +448,9 @@ class MyTheme {
     hoverColor: Color.fromARGB(255, 45, 46, 53),
     scaffoldBackgroundColor: Color(0xFF18191E),
     dialogBackgroundColor: Color(0xFF18191E),
+    appBarTheme: AppBarTheme(
+      shadowColor: Colors.transparent,
+    ),
     dialogTheme: DialogTheme(
       elevation: 15,
       shape: RoundedRectangleBorder(
@@ -547,7 +556,7 @@ class MyTheme {
 
   static void changeDarkMode(ThemeMode mode) async {
     Get.changeThemeMode(mode);
-    if (desktopType == DesktopType.main || isAndroid || isIOS) {
+    if (desktopType == DesktopType.main || isAndroid || isIOS || isWeb) {
       if (mode == ThemeMode.system) {
         await bind.mainSetLocalOption(
             key: kCommConfKeyTheme, value: defaultOptionTheme);
@@ -555,7 +564,7 @@ class MyTheme {
         await bind.mainSetLocalOption(
             key: kCommConfKeyTheme, value: mode.toShortString());
       }
-      await bind.mainChangeTheme(dark: mode.toShortString());
+      if (!isWeb) await bind.mainChangeTheme(dark: mode.toShortString());
       // Synchronize the window theme of the system.
       updateSystemWindowTheme();
     }
@@ -629,10 +638,30 @@ List<Locale> supportedLocales = const [
   Locale('da'),
   Locale('eo'),
   Locale('tr'),
-  Locale('vi'),
-  Locale('pl'),
   Locale('kz'),
   Locale('es'),
+  Locale('nl'),
+  Locale('nb'),
+  Locale('et'),
+  Locale('eu'),
+  Locale('bg'),
+  Locale('be'),
+  Locale('vn'),
+  Locale('uk'),
+  Locale('fa'),
+  Locale('ca'),
+  Locale('el'),
+  Locale('sv'),
+  Locale('sq'),
+  Locale('sr'),
+  Locale('th'),
+  Locale('sl'),
+  Locale('ro'),
+  Locale('lt'),
+  Locale('lv'),
+  Locale('ar'),
+  Locale('he'),
+  Locale('hr'),
 ];
 
 String formatDurationToTime(Duration duration) {
@@ -1057,6 +1086,49 @@ class CustomAlertDialog extends StatelessWidget {
   }
 }
 
+Widget createDialogContent(String text) {
+  final RegExp linkRegExp = RegExp(r'(https?://[^\s]+)');
+  final List<TextSpan> spans = [];
+  int start = 0;
+  bool hasLink = false;
+
+  linkRegExp.allMatches(text).forEach((match) {
+    hasLink = true;
+    if (match.start > start) {
+      spans.add(TextSpan(text: text.substring(start, match.start)));
+    }
+    spans.add(TextSpan(
+      text: match.group(0) ?? '',
+      style: TextStyle(
+        color: Colors.blue,
+        decoration: TextDecoration.underline,
+      ),
+      recognizer: TapGestureRecognizer()
+        ..onTap = () {
+          String linkText = match.group(0) ?? '';
+          linkText = linkText.replaceAll(RegExp(r'[.,;!?]+$'), '');
+          launchUrl(Uri.parse(linkText));
+        },
+    ));
+    start = match.end;
+  });
+
+  if (start < text.length) {
+    spans.add(TextSpan(text: text.substring(start)));
+  }
+
+  if (!hasLink) {
+    return SelectableText(text, style: const TextStyle(fontSize: 15));
+  }
+
+  return SelectableText.rich(
+    TextSpan(
+      style: TextStyle(color: Colors.black, fontSize: 15),
+      children: spans,
+    ),
+  );
+}
+
 void msgBox(SessionID sessionId, String type, String title, String text,
     String link, OverlayDialogManager dialogManager,
     {bool? hasCancel, ReconnectHandle? reconnect, int? reconnectTimeout}) {
@@ -1214,7 +1286,7 @@ Widget msgboxContent(String type, String title, String text) {
               translate(title),
               style: TextStyle(fontSize: 21),
             ).marginOnly(bottom: 10),
-            Text(translateText(text), style: const TextStyle(fontSize: 15)),
+            createDialogContent(translateText(text)),
           ],
         ),
       ),
@@ -2813,7 +2885,7 @@ Widget buildErrorBanner(BuildContext context,
                     alignment: Alignment.centerLeft,
                     child: Tooltip(
                       message: translate(err.value),
-                      child: Text(
+                      child: SelectableText(
                         translate(err.value),
                       ),
                     )).marginSymmetric(vertical: 2),
@@ -3082,6 +3154,7 @@ class _ReconnectCountDownButtonState extends State<_ReconnectCountDownButton> {
 
 importConfig(List<TextEditingController>? controllers, List<RxString>? errMsgs,
     String? text) {
+  text = text?.trim();
   if (text != null && text.isNotEmpty) {
     try {
       final sc = ServerConfig.decode(text);
@@ -3429,7 +3502,8 @@ Widget buildVirtualWindowFrame(BuildContext context, Widget child) {
   );
 }
 
-get windowEdgeSize => isLinux && !_linuxWindowResizable ? 0.0 : kWindowEdgeSize;
+get windowResizeEdgeSize =>
+    isLinux && !_linuxWindowResizable ? 0.0 : kWindowResizeEdgeSize;
 
 // `windowManager.setResizable(false)` will reset the window size to the default size on Linux and then set unresizable.
 // See _linuxWindowResizable for more details.
@@ -3490,3 +3564,36 @@ disableWindowMovable(int? windowId) {
     WindowController.fromWindowId(windowId).setMovable(false);
   }
 }
+
+Widget netWorkErrorWidget() {
+  return Center(
+      child: Column(
+    mainAxisAlignment: MainAxisAlignment.center,
+    crossAxisAlignment: CrossAxisAlignment.center,
+    children: [
+      Text(translate("network_error_tip")),
+      ElevatedButton(
+              onPressed: gFFI.userModel.refreshCurrentUser,
+              child: Text(translate("Retry")))
+          .marginSymmetric(vertical: 16),
+      SelectableText(gFFI.userModel.networkError.value,
+          style: TextStyle(fontSize: 11, color: Colors.red)),
+    ],
+  ));
+}
+
+List<ResizeEdge>? get windowManagerEnableResizeEdges => isWindows
+    ? [
+        ResizeEdge.topLeft,
+        ResizeEdge.top,
+        ResizeEdge.topRight,
+      ]
+    : null;
+
+List<SubWindowResizeEdge>? get subWindowManagerEnableResizeEdges => isWindows
+    ? [
+        SubWindowResizeEdge.topLeft,
+        SubWindowResizeEdge.top,
+        SubWindowResizeEdge.topRight,
+      ]
+    : null;

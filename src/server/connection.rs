@@ -1,6 +1,6 @@
 use super::{input_service::*, *};
 #[cfg(not(any(target_os = "android", target_os = "ios")))]
-use crate::clipboard::update_clipboard;
+use crate::clipboard::{update_clipboard, ClipboardSide};
 #[cfg(any(target_os = "windows", target_os = "linux", target_os = "macos"))]
 use crate::clipboard_file::*;
 #[cfg(target_os = "android")]
@@ -27,7 +27,7 @@ use hbb_common::platform::linux::run_cmds;
 #[cfg(target_os = "android")]
 use hbb_common::protobuf::EnumOrUnknown;
 use hbb_common::{
-    config::{self, Config},
+    config::{self, keys, Config, TrustedDevice},
     fs::{self, can_enable_overwrite_detection},
     futures::{SinkExt, StreamExt},
     get_time, get_version_number,
@@ -335,7 +335,7 @@ impl Connection {
             clipboard: Connection::permission("enable-clipboard"),
             audio: Connection::permission("enable-audio"),
             // to-do: make sure is the option correct here
-            file: Connection::permission(config::keys::OPTION_ENABLE_FILE_TRANSFER),
+            file: Connection::permission(keys::OPTION_ENABLE_FILE_TRANSFER),
             restart: Connection::permission("enable-remote-restart"),
             recording: Connection::permission("enable-record-session"),
             block_input: Connection::permission("enable-block-input"),
@@ -502,10 +502,12 @@ impl Connection {
                             } else if &name == "audio" {
                                 conn.audio = enabled;
                                 conn.send_permission(Permission::Audio, enabled).await;
-                                if let Some(s) = conn.server.upgrade() {
-                                    s.write().unwrap().subscribe(
-                                        super::audio_service::NAME,
-                                        conn.inner.clone(), conn.audio_enabled());
+                                if conn.authorized {
+                                    if let Some(s) = conn.server.upgrade() {
+                                        s.write().unwrap().subscribe(
+                                            super::audio_service::NAME,
+                                            conn.inner.clone(), conn.audio_enabled());
+                                    }
                                 }
                             } else if &name == "file" {
                                 conn.file = enabled;
@@ -682,8 +684,19 @@ impl Connection {
                                 msg = Arc::new(new_msg);
                             }
                         }
+                        Some(message::Union::MultiClipboards(_multi_clipboards)) => {
+                            #[cfg(not(any(target_os = "android", target_os = "ios")))]
+                            if let Some(msg_out) = crate::clipboard::get_msg_if_not_support_multi_clip(&conn.lr.version, &conn.lr.my_platform, _multi_clipboards) {
+                                if let Err(err) = conn.stream.send(&msg_out).await {
+                                    conn.on_close(&err.to_string(), false).await;
+                                    break;
+                                }
+                                continue;
+                            }
+                        }
                         _ => {}
                     }
+
                     let msg: &Message = &msg;
                     if let Err(err) = conn.stream.send(msg).await {
                         conn.on_close(&err.to_string(), false).await;
@@ -1266,29 +1279,9 @@ impl Connection {
                 self.send(msg_out).await;
             }
 
-            #[cfg(not(any(target_os = "android", target_os = "ios")))]
-            {
-                #[cfg(not(windows))]
-                let displays = display_service::try_get_displays();
-                #[cfg(windows)]
-                let displays = display_service::try_get_displays_add_amyuni_headless();
-                pi.resolutions = Some(SupportedResolutions {
-                    resolutions: displays
-                        .map(|displays| {
-                            displays
-                                .get(self.display_idx)
-                                .map(|d| crate::platform::resolutions(&d.name()))
-                                .unwrap_or(vec![])
-                        })
-                        .unwrap_or(vec![]),
-                    ..Default::default()
-                })
-                .into();
-            }
-
             try_activate_screen();
 
-            match super::display_service::update_get_sync_displays().await {
+            match super::display_service::update_get_sync_displays_on_login().await {
                 Err(err) => {
                     res.set_error(format!("{}", err));
                 }
@@ -1301,13 +1294,25 @@ impl Connection {
                     }
                     pi.displays = displays;
                     pi.current_display = self.display_idx as _;
+                    #[cfg(not(any(target_os = "android", target_os = "ios")))]
+                    {
+                        pi.resolutions = Some(SupportedResolutions {
+                            resolutions: pi
+                                .displays
+                                .get(self.display_idx)
+                                .map(|d| crate::platform::resolutions(&d.name))
+                                .unwrap_or(vec![]),
+                            ..Default::default()
+                        })
+                        .into();
+                    }
                     res.set_peer_info(pi);
                     sub_service = true;
 
                     #[cfg(target_os = "linux")]
                     {
                         // use rdp_input when uinput is not available in wayland. Ex: flatpak
-                        if !is_x11() && !crate::is_server() {
+                        if input_service::wayland_use_rdp_input() {
                             let _ = setup_rdp_input().await;
                         }
                     }
@@ -1354,7 +1359,10 @@ impl Connection {
                 if !self.follow_remote_window {
                     noperms.push(NAME_WINDOW_FOCUS);
                 }
-                if !self.clipboard_enabled() || !self.peer_keyboard_enabled() {
+                if !self.clipboard_enabled()
+                    || !self.peer_keyboard_enabled()
+                    || crate::get_builtin_option(keys::OPTION_ONE_WAY_CLIPBOARD_REDIRECTION) == "Y"
+                {
                     noperms.push(super::clipboard_service::NAME);
                 }
                 if !self.audio_enabled() {
@@ -1469,6 +1477,9 @@ impl Connection {
         let mut msg_out = Message::new();
         let mut res = LoginResponse::new();
         res.set_error(err.to_string());
+        if err.to_string() == crate::client::REQUIRE_2FA {
+            res.enable_trusted_devices = Self::enable_trusted_devices();
+        }
         msg_out.set_login_response(res);
         self.send(msg_out).await;
     }
@@ -1610,10 +1621,31 @@ impl Connection {
         }
     }
 
+    #[inline]
+    fn enable_trusted_devices() -> bool {
+        config::option2bool(
+            keys::OPTION_ENABLE_TRUSTED_DEVICES,
+            &Config::get_option(keys::OPTION_ENABLE_TRUSTED_DEVICES),
+        )
+    }
+
     async fn handle_login_request_without_validation(&mut self, lr: &LoginRequest) {
         self.lr = lr.clone();
         if let Some(o) = lr.option.as_ref() {
             self.options_in_login = Some(o.clone());
+        }
+        if self.require_2fa.is_some() && !lr.hwid.is_empty() && Self::enable_trusted_devices() {
+            let devices = Config::get_trusted_devices();
+            if let Some(device) = devices.iter().find(|d| d.hwid == lr.hwid) {
+                if !device.outdate()
+                    && device.id == lr.my_id
+                    && device.name == lr.my_name
+                    && device.platform == lr.my_platform
+                {
+                    log::info!("2FA bypassed by trusted devices");
+                    self.require_2fa = None;
+                }
+            }
         }
         self.video_ack_required = lr.video_ack_required;
     }
@@ -1633,9 +1665,11 @@ impl Connection {
                 .await
                 {
                     log::error!("ipc to connection manager exit: {}", err);
+                    // https://github.com/rustdesk/rustdesk-server-pro/discussions/382#discussioncomment-10525725, cm may start failed
                     #[cfg(windows)]
                     if !crate::platform::is_prelogin()
                         && !err.to_string().contains(crate::platform::EXPLORER_EXE)
+                        && !crate::hbbs_http::sync::is_pro()
                     {
                         allow_err!(tx_from_cm_clone.send(Data::CmErr(err.to_string())));
                     }
@@ -1658,7 +1692,7 @@ impl Connection {
             }
             match lr.union {
                 Some(login_request::Union::FileTransfer(ft)) => {
-                    if !Connection::permission(config::keys::OPTION_ENABLE_FILE_TRANSFER) {
+                    if !Connection::permission(keys::OPTION_ENABLE_FILE_TRANSFER) {
                         self.send_login_error("No permission of file transfer")
                             .await;
                         sleep(1.).await;
@@ -1731,7 +1765,9 @@ impl Connection {
                 self.send_login_error(crate::client::LOGIN_MSG_OFFLINE)
                     .await;
                 return false;
-            } else if password::approve_mode() == ApproveMode::Click
+            } else if (password::approve_mode() == ApproveMode::Click
+                && !(crate::platform::is_prelogin()
+                    && crate::get_builtin_option(keys::OPTION_ALLOW_LOGON_SCREEN_PASSWORD) == "Y"))
                 || password::approve_mode() == ApproveMode::Both && !password::has_valid_password()
             {
                 self.try_start_cm(lr.my_id, lr.my_name, false);
@@ -1827,6 +1863,15 @@ impl Connection {
                                     tfa: true,
                                 },
                             );
+                        }
+                        if !tfa.hwid.is_empty() && Self::enable_trusted_devices() {
+                            Config::add_trusted_device(TrustedDevice {
+                                hwid: tfa.hwid,
+                                time: hbb_common::get_time(),
+                                id: self.lr.my_id.clone(),
+                                name: self.lr.my_name.clone(),
+                                platform: self.lr.my_platform.clone(),
+                            });
                         }
                     } else {
                         self.update_failure(failure, false, 1);
@@ -2049,7 +2094,7 @@ impl Connection {
                 Some(message::Union::Clipboard(cb)) => {
                     if self.clipboard {
                         #[cfg(not(any(target_os = "android", target_os = "ios")))]
-                        update_clipboard(cb, None);
+                        update_clipboard(vec![cb], ClipboardSide::Host);
                         #[cfg(all(feature = "flutter", target_os = "android"))]
                         {
                             let content = if cb.compress {
@@ -2070,6 +2115,13 @@ impl Connection {
                         }
                     }
                 }
+                Some(message::Union::MultiClipboards(_mcb)) =>
+                {
+                    #[cfg(not(any(target_os = "android", target_os = "ios")))]
+                    if self.clipboard {
+                        update_clipboard(_mcb.clipboards, ClipboardSide::Host);
+                    }
+                }
                 Some(message::Union::Cliprdr(_clip)) =>
                 {
                     #[cfg(any(target_os = "windows", target_os = "linux", target_os = "macos"))]
@@ -2085,6 +2137,36 @@ impl Connection {
                                 self.delayed_read_dir = Some((rd.path, rd.include_hidden));
                             }
                             return true;
+                        }
+                        if crate::get_builtin_option(keys::OPTION_ONE_WAY_FILE_TRANSFER) == "Y" {
+                            let mut job_id = None;
+                            match &fa.union {
+                                Some(file_action::Union::Send(s)) => {
+                                    job_id = Some(s.id);
+                                }
+                                Some(file_action::Union::RemoveFile(rf)) => {
+                                    job_id = Some(rf.id);
+                                }
+                                Some(file_action::Union::Rename(r)) => {
+                                    job_id = Some(r.id);
+                                }
+                                Some(file_action::Union::Create(c)) => {
+                                    job_id = Some(c.id);
+                                }
+                                Some(file_action::Union::RemoveDir(rd)) => {
+                                    job_id = Some(rd.id);
+                                }
+                                _ => {}
+                            }
+                            if let Some(job_id) = job_id {
+                                self.send(fs::new_error(
+                                    job_id,
+                                    "one-way-file-transfer-tip",
+                                    0,
+                                ))
+                                .await;
+                                return true;
+                            }
                         }
                         match fa.union {
                             Some(file_action::Union::ReadDir(rd)) => {
@@ -2220,6 +2302,22 @@ impl Connection {
                                 if let Some(job) = fs::get_job(r.id, &mut self.read_jobs) {
                                     job.confirm(&r);
                                 }
+                            }
+                            Some(file_action::Union::Rename(r)) => {
+                                self.send_fs(ipc::FS::Rename {
+                                    id: r.id,
+                                    path: r.path.clone(),
+                                    new_name: r.new_name.clone(),
+                                });
+                                self.send_to_cm(ipc::Data::FileTransferLog((
+                                    "rename".to_string(),
+                                    serde_json::to_string(&FileRenameLog {
+                                        conn_id: self.inner.id(),
+                                        path: r.path,
+                                        new_name: r.new_name,
+                                    })
+                                    .unwrap_or_default(),
+                                )));
                             }
                             _ => {}
                         }
@@ -2650,7 +2748,7 @@ impl Connection {
                 }
             }
         } else {
-            if let Err(e) = virtual_display_manager::plug_out_monitor(t.display) {
+            if let Err(e) = virtual_display_manager::plug_out_monitor(t.display, false, true) {
                 log::error!("Failed to plug out virtual display {}: {}", t.display, e);
                 self.send(make_msg(format!(
                     "Failed to plug out virtual displays: {}",
@@ -3396,6 +3494,14 @@ struct FileActionLog {
     conn_id: i32,
     path: String,
     dir: bool,
+}
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct FileRenameLog {
+    conn_id: i32,
+    path: String,
+    new_name: String,
 }
 
 struct FileRemoveLogControl {

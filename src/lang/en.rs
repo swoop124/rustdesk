@@ -232,5 +232,8 @@ pub static ref T: std::collections::HashMap<&'static str, &'static str> =
         ("cancel-2fa-confirm-tip", "Are you sure you want to cancel 2FA?"),
         ("cancel-bot-confirm-tip", "Are you sure you want to cancel Telegram bot?"),
         ("About RustDesk", ""),
+        ("network_error_tip", "Please check your network connection, then click retry."),
+        ("enable-trusted-devices-tip", "Skip 2FA verification on trusted devices"),
+        ("one-way-file-transfer-tip", "One-way file transfer is enabled on the controlled side."),
     ].iter().cloned().collect();
 }
