@@ -25,9 +25,7 @@ use hbb_common::{
     config::{self, Config, Config2},
     futures::StreamExt as _,
     futures_util::sink::SinkExt,
-    log, password_security as password,
-    sodiumoxide::base64,
-    timeout,
+    log, password_security as password, timeout,
     tokio::{
         self,
         io::{AsyncRead, AsyncWrite},
@@ -45,6 +43,10 @@ pub static EXIT_RECV_CLOSE: AtomicBool = AtomicBool::new(true);
 #[derive(Debug, Serialize, Deserialize, Clone)]
 #[serde(tag = "t", content = "c")]
 pub enum FS {
+    ReadEmptyDirs {
+        dir: String,
+        include_hidden: bool,
+    },
     ReadDir {
         dir: String,
         include_hidden: bool,
@@ -121,6 +123,7 @@ pub struct ClipboardNonFile {
     pub height: i32,
     // message.proto: ClipboardFormat
     pub format: i32,
+    pub special_name: String,
 }
 
 #[cfg(not(any(target_os = "android", target_os = "ios")))]
@@ -185,6 +188,7 @@ pub enum Data {
     Login {
         id: i32,
         is_file_transfer: bool,
+        is_view_camera: bool,
         peer_id: String,
         name: String,
         authorized: bool,
@@ -212,8 +216,6 @@ pub enum Data {
     MouseMoveTime(i64),
     Authorize,
     Close,
-    #[cfg(target_os = "android")]
-    InputControl(bool),
     #[cfg(windows)]
     SAS,
     UserSid(Option<u32>),
@@ -227,7 +229,7 @@ pub enum Data {
     FS(FS),
     Test,
     SyncConfig(Option<Box<(Config, Config2)>>),
-    #[cfg(not(any(target_os = "android", target_os = "ios")))]
+    #[cfg(target_os = "windows")]
     ClipboardFile(ClipboardFile),
     ClipboardFileEnabled(bool),
     #[cfg(target_os = "windows")]
@@ -263,6 +265,7 @@ pub enum Data {
     ControlledSessionCount(usize),
     CmErr(String),
     CheckHwcodec,
+    #[cfg(feature = "flutter")]
     VideoConnCount(Option<usize>),
     // Although the key is not neccessary, it is used to avoid hardcoding the key.
     WaylandScreencastRestoreToken((String, String)),
@@ -452,6 +455,7 @@ async fn handle(data: Data, stream: &mut Connection) {
                 log::info!("socks updated");
             }
         },
+        #[cfg(feature = "flutter")]
         Data::VideoConnCount(None) => {
             let n = crate::server::AUTHED_CONNS
                 .lock()
@@ -889,7 +893,7 @@ pub async fn set_data(data: &Data) -> ResultType<()> {
     set_data_async(data).await
 }
 
-pub async fn set_data_async(data: &Data) -> ResultType<()> {
+async fn set_data_async(data: &Data) -> ResultType<()> {
     let mut c = connect(1000, "").await?;
     c.send(data).await?;
     Ok(())
@@ -1277,6 +1281,6 @@ mod test {
     #[test]
     fn verify_ffi_enum_data_size() {
         println!("{}", std::mem::size_of::<Data>());
-        assert!(std::mem::size_of::<Data>() < 96);
+        assert!(std::mem::size_of::<Data>() <= 96);
     }
 }

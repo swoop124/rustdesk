@@ -9,6 +9,7 @@ import 'package:flutter/material.dart' hide TabBarTheme;
 import 'package:flutter_hbb/common.dart';
 import 'package:flutter_hbb/consts.dart';
 import 'package:flutter_hbb/desktop/pages/remote_page.dart';
+import 'package:flutter_hbb/desktop/pages/view_camera_page.dart';
 import 'package:flutter_hbb/main.dart';
 import 'package:flutter_hbb/models/platform_model.dart';
 import 'package:flutter_hbb/models/state_model.dart';
@@ -51,6 +52,7 @@ enum DesktopTabType {
   cm,
   remoteScreen,
   fileTransfer,
+  viewCamera,
   portForward,
   install,
 }
@@ -179,11 +181,13 @@ class DesktopTabController {
       jumpTo(state.value.tabs.indexWhere((tab) => tab.key == key),
           callOnSelected: callOnSelected);
 
-  bool jumpToByKeyAndDisplay(String key, int display) {
+  bool jumpToByKeyAndDisplay(String key, int display, {bool isCamera = false}) {
     for (int i = 0; i < state.value.tabs.length; i++) {
       final tab = state.value.tabs[i];
       if (tab.key == key) {
-        final ffi = (tab.page as RemotePage).ffi;
+        final ffi = isCamera
+            ? (tab.page as ViewCameraPage).ffi
+            : (tab.page as RemotePage).ffi;
         if (ffi.ffiModel.pi.currentDisplay == display) {
           return jumpTo(i, callOnSelected: true);
         }
@@ -246,7 +250,6 @@ class DesktopTab extends StatefulWidget {
   final Color? selectedTabBackgroundColor;
   final Color? unSelectedTabBackgroundColor;
   final Color? selectedBorderColor;
-  final RxBool? blockTab;
 
   final DesktopTabController controller;
 
@@ -272,7 +275,6 @@ class DesktopTab extends StatefulWidget {
     this.selectedTabBackgroundColor,
     this.unSelectedTabBackgroundColor,
     this.selectedBorderColor,
-    this.blockTab,
   }) : super(key: key);
 
   static RxString tablabelGetter(String peerId) {
@@ -311,7 +313,6 @@ class _DesktopTabState extends State<DesktopTab>
   Color? get unSelectedTabBackgroundColor =>
       widget.unSelectedTabBackgroundColor;
   Color? get selectedBorderColor => widget.selectedBorderColor;
-  RxBool? get blockTab => widget.blockTab;
   DesktopTabController get controller => widget.controller;
   RxList<String> get invisibleTabKeys => widget.invisibleTabKeys;
   Debouncer get _scrollDebounce => widget._scrollDebounce;
@@ -533,21 +534,9 @@ class _DesktopTabState extends State<DesktopTab>
     ]);
   }
 
-  Widget _buildBlock({required Widget child}) {
-    if (blockTab != null) {
-      return buildRemoteBlock(
-          child: child,
-          block: blockTab!,
-          use: canBeBlocked,
-          mask: tabType == DesktopTabType.main);
-    } else {
-      return child;
-    }
-  }
-
   List<Widget> _tabWidgets = [];
   Widget _buildPageView() {
-    final child = _buildBlock(
+    final child = Container(
         child: Obx(() => PageView(
             controller: state.value.pageController,
             physics: NeverScrollableScrollPhysics(),
@@ -740,6 +729,7 @@ class WindowActionPanelState extends State<WindowActionPanel> {
     return widget.tabController.state.value.tabs.length > 1 &&
         (widget.tabController.tabType == DesktopTabType.remoteScreen ||
             widget.tabController.tabType == DesktopTabType.fileTransfer ||
+            widget.tabController.tabType == DesktopTabType.viewCamera ||
             widget.tabController.tabType == DesktopTabType.portForward ||
             widget.tabController.tabType == DesktopTabType.cm);
   }

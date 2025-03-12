@@ -18,7 +18,7 @@ import '../common.dart';
 import '../consts.dart';
 
 /// Mouse button enum.
-enum MouseButtons { left, right, wheel }
+enum MouseButtons { left, right, wheel, back }
 
 const _kMouseEventDown = 'mousedown';
 const _kMouseEventUp = 'mouseup';
@@ -155,6 +155,8 @@ extension ToString on MouseButtons {
         return 'right';
       case MouseButtons.wheel:
         return 'wheel';
+      case MouseButtons.back:
+        return 'back';
     }
   }
 }
@@ -367,6 +369,7 @@ class InputModel {
   String? get peerPlatform => parent.target?.ffiModel.pi.platform;
   bool get isViewOnly => parent.target!.ffiModel.viewOnly;
   double get devicePixelRatio => parent.target!.canvasModel.devicePixelRatio;
+  bool get isViewCamera => parent.target!.connType == ConnType.viewCamera;
 
   InputModel(this.parent) {
     sessionId = parent.target!.sessionId;
@@ -469,6 +472,7 @@ class InputModel {
 
   KeyEventResult handleRawKeyEvent(RawKeyEvent e) {
     if (isViewOnly) return KeyEventResult.handled;
+    if (isViewCamera) return KeyEventResult.handled;
     if (!isInputSourceFlutter) {
       if (isDesktop) {
         return KeyEventResult.handled;
@@ -523,6 +527,7 @@ class InputModel {
 
   KeyEventResult handleKeyEvent(KeyEvent e) {
     if (isViewOnly) return KeyEventResult.handled;
+    if (isViewCamera) return KeyEventResult.handled;
     if (!isInputSourceFlutter) {
       if (isDesktop) {
         return KeyEventResult.handled;
@@ -544,8 +549,40 @@ class InputModel {
       handleKeyDownEventModifiers(e);
     }
 
-    // * Currently mobile does not enable map mode
-    if ((isDesktop || isWebDesktop) && keyboardMode == kKeyMapMode) {
+    bool isMobileAndMapMode = false;
+    if (isMobile) {
+      // Do not use map mode if mobile -> Android. Android does not support map mode for now.
+      // Because simulating the physical key events(uhid) which requires root permission is not supported.
+      if (peerPlatform != kPeerPlatformAndroid) {
+        if (isIOS) {
+          isMobileAndMapMode = true;
+        } else {
+          // The physicalKey.usbHidUsage may be not correct for soft keyboard on Android.
+          // iOS does not have this issue.
+          // 1. Open the soft keyboard on Android
+          // 2. Switch to input method like zh/ko/ja
+          // 3. Click Backspace and Enter on the soft keyboard or physical keyboard
+          // 4. The physicalKey.usbHidUsage is not correct.
+          // PhysicalKeyboardKey#8ac83(usbHidUsage: "0x1100000042", debugName: "Key with ID 0x1100000042")
+          // LogicalKeyboardKey#2604c(keyId: "0x10000000d", keyLabel: "Enter", debugName: "Enter")
+          //
+          // The correct PhysicalKeyboardKey should be
+          // PhysicalKeyboardKey#e14a9(usbHidUsage: "0x00070028", debugName: "Enter")
+          // https://github.com/flutter/flutter/issues/157771
+          // We cannot use the debugName to determine the key is correct or not, because it's null in release mode.
+          // The normal `usbHidUsage` for keyboard shoud be between [0x00000010, 0x000c029f]
+          // https://github.com/flutter/flutter/blob/c051b69e2a2224300e20d93dbd15f4b91e8844d1/packages/flutter/lib/src/services/keyboard_key.g.dart#L5332 - 5600
+          final isNormalHsbHidUsage = (e.physicalKey.usbHidUsage >> 20) == 0;
+          isMobileAndMapMode = isNormalHsbHidUsage &&
+              // No need to check `!['Backspace', 'Enter'].contains(e.logicalKey.keyLabel)`
+              // But we still add it for more reliability.
+              !['Backspace', 'Enter'].contains(e.logicalKey.keyLabel);
+        }
+      }
+    }
+    final isDesktopAndMapMode =
+        isDesktop || (isWebDesktop && keyboardMode == kKeyMapMode);
+    if (isMobileAndMapMode || isDesktopAndMapMode) {
       // FIXME: e.character is wrong for dead keys, eg: ^ in de
       newKeyboardMode(
           e.character ?? '',
@@ -690,6 +727,7 @@ class InputModel {
   /// [press] indicates a click event(down and up).
   void inputKey(String name, {bool? down, bool? press}) {
     if (!keyboardPerm) return;
+    if (isViewCamera) return;
     bind.sessionInputKey(
         sessionId: sessionId,
         name: name,
@@ -736,22 +774,23 @@ class InputModel {
   }
 
   /// Send a mouse tap event(down and up).
-  void tap(MouseButtons button) {
-    sendMouse('down', button);
-    sendMouse('up', button);
+  Future<void> tap(MouseButtons button) async {
+    await sendMouse('down', button);
+    await sendMouse('up', button);
   }
 
-  void tapDown(MouseButtons button) {
-    sendMouse('down', button);
+  Future<void> tapDown(MouseButtons button) async {
+    await sendMouse('down', button);
   }
 
-  void tapUp(MouseButtons button) {
-    sendMouse('up', button);
+  Future<void> tapUp(MouseButtons button) async {
+    await sendMouse('up', button);
   }
 
   /// Send scroll event with scroll distance [y].
-  void scroll(int y) {
-    bind.sessionSendMouse(
+  Future<void> scroll(int y) async {
+    if (isViewCamera) return;
+    await bind.sessionSendMouse(
         sessionId: sessionId,
         msg: json
             .encode(modify({'id': id, 'type': 'wheel', 'y': y.toString()})));
@@ -772,9 +811,10 @@ class InputModel {
   }
 
   /// Send mouse press event.
-  void sendMouse(String type, MouseButtons button) {
+  Future<void> sendMouse(String type, MouseButtons button) async {
     if (!keyboardPerm) return;
-    bind.sessionSendMouse(
+    if (isViewCamera) return;
+    await bind.sessionSendMouse(
         sessionId: sessionId,
         msg: json.encode(modify({'type': type, 'buttons': button.value})));
   }
@@ -798,11 +838,12 @@ class InputModel {
   }
 
   /// Send mouse movement event with distance in [x] and [y].
-  void moveMouse(double x, double y) {
+  Future<void> moveMouse(double x, double y) async {
     if (!keyboardPerm) return;
+    if (isViewCamera) return;
     var x2 = x.toInt();
     var y2 = y.toInt();
-    bind.sessionSendMouse(
+    await bind.sessionSendMouse(
         sessionId: sessionId,
         msg: json.encode(modify({'x': '$x2', 'y': '$y2'})));
   }
@@ -823,14 +864,16 @@ class InputModel {
     _lastScale = 1.0;
     _stopFling = true;
     if (isViewOnly) return;
+    if (isViewCamera) return;
     if (peerPlatform == kPeerPlatformAndroid) {
-      handlePointerEvent('touch', 'pan_start', e.position);
+      handlePointerEvent('touch', kMouseEventTypePanStart, e.position);
     }
   }
 
   // https://docs.flutter.dev/release/breaking-changes/trackpad-gestures
   void onPointerPanZoomUpdate(PointerPanZoomUpdateEvent e) {
     if (isViewOnly) return;
+    if (isViewCamera) return;
     if (peerPlatform != kPeerPlatformAndroid) {
       final scale = ((e.scale - _lastScale) * 1000).toInt();
       _lastScale = e.scale;
@@ -867,9 +910,10 @@ class InputModel {
     }
     if (x != 0 || y != 0) {
       if (peerPlatform == kPeerPlatformAndroid) {
-        handlePointerEvent(
-            'touch', 'pan_update', Offset(x.toDouble(), y.toDouble()));
+        handlePointerEvent('touch', kMouseEventTypePanUpdate,
+            Offset(x.toDouble(), y.toDouble()));
       } else {
+        if (isViewCamera) return;
         bind.sessionSendMouse(
             sessionId: sessionId,
             msg: '{"type": "trackpad", "x": "$x", "y": "$y"}');
@@ -878,6 +922,7 @@ class InputModel {
   }
 
   void _scheduleFling(double x, double y, int delay) {
+    if (isViewCamera) return;
     if ((x == 0 && y == 0) || _stopFling) {
       _fling = false;
       return;
@@ -929,8 +974,9 @@ class InputModel {
   }
 
   void onPointerPanZoomEnd(PointerPanZoomEndEvent e) {
+    if (isViewCamera) return;
     if (peerPlatform == kPeerPlatformAndroid) {
-      handlePointerEvent('touch', 'pan_end', e.position);
+      handlePointerEvent('touch', kMouseEventTypePanEnd, e.position);
       return;
     }
 
@@ -960,6 +1006,7 @@ class InputModel {
     _remoteWindowCoords = [];
     _windowRect = null;
     if (isViewOnly) return;
+    if (isViewCamera) return;
     if (e.kind != ui.PointerDeviceKind.mouse) {
       if (isPhysicalMouse.value) {
         isPhysicalMouse.value = false;
@@ -973,6 +1020,7 @@ class InputModel {
   void onPointUpImage(PointerUpEvent e) {
     if (isDesktop) _queryOtherWindowCoords = false;
     if (isViewOnly) return;
+    if (isViewCamera) return;
     if (e.kind != ui.PointerDeviceKind.mouse) return;
     if (isPhysicalMouse.value) {
       handleMouse(_getMouseEvent(e, _kMouseEventUp), e.position);
@@ -981,6 +1029,7 @@ class InputModel {
 
   void onPointMoveImage(PointerMoveEvent e) {
     if (isViewOnly) return;
+    if (isViewCamera) return;
     if (e.kind != ui.PointerDeviceKind.mouse) return;
     if (_queryOtherWindowCoords) {
       Future.delayed(Duration.zero, () async {
@@ -1015,6 +1064,7 @@ class InputModel {
 
   void onPointerSignalImage(PointerSignalEvent e) {
     if (isViewOnly) return;
+    if (isViewCamera) return;
     if (e is PointerScrollEvent) {
       var dx = e.scrollDelta.dx.toInt();
       var dy = e.scrollDelta.dy.toInt();
@@ -1048,7 +1098,7 @@ class InputModel {
         onExit: true,
       );
 
-  int trySetNearestRange(int v, int min, int max, int n) {
+  static double tryGetNearestRange(double v, double min, double max, double n) {
     if (v < min && v >= min - n) {
       v = min;
     }
@@ -1088,13 +1138,13 @@ class InputModel {
     // to-do: handle mouse events
 
     late final dynamic evtValue;
-    if (type == 'pan_update') {
+    if (type == kMouseEventTypePanUpdate) {
       evtValue = {
         'x': x.toInt(),
         'y': y.toInt(),
       };
     } else {
-      final isMoveTypes = ['pan_start', 'pan_end'];
+      final isMoveTypes = [kMouseEventTypePanStart, kMouseEventTypePanEnd];
       final pos = handlePointerDevicePos(
         kPointerEventKindTouch,
         x,
@@ -1106,12 +1156,13 @@ class InputModel {
         return;
       }
       evtValue = {
-        'x': pos.x,
-        'y': pos.y,
+        'x': pos.x.toInt(),
+        'y': pos.y.toInt(),
       };
     }
 
     final evt = PointerEventToRust(kind, type, evtValue).toJson();
+    if (isViewCamera) return;
     bind.sessionSendPointer(
         sessionId: sessionId, msg: json.encode(modify(evt)));
   }
@@ -1143,20 +1194,21 @@ class InputModel {
     Offset offset, {
     bool onExit = false,
   }) {
+    if (isViewCamera) return;
     double x = offset.dx;
     double y = max(0.0, offset.dy);
     if (_checkPeerControlProtected(x, y)) {
       return;
     }
 
-    var type = '';
+    var type = kMouseEventTypeDefault;
     var isMove = false;
     switch (evt['type']) {
       case _kMouseEventDown:
-        type = 'down';
+        type = kMouseEventTypeDown;
         break;
       case _kMouseEventUp:
-        type = 'up';
+        type = kMouseEventTypeUp;
         break;
       case _kMouseEventMove:
         _pointerMovedAfterEnter = true;
@@ -1167,7 +1219,7 @@ class InputModel {
     }
     evt['type'] = type;
 
-    if (type == 'down' && !_pointerMovedAfterEnter) {
+    if (type == kMouseEventTypeDown && !_pointerMovedAfterEnter) {
       // Move mouse to the position of the down event first.
       lastMousePos = ui.Offset(x, y);
       refreshMousePos();
@@ -1189,8 +1241,8 @@ class InputModel {
       evt['x'] = '0';
       evt['y'] = '0';
     } else {
-      evt['x'] = '${pos.x}';
-      evt['y'] = '${pos.y}';
+      evt['x'] = '${pos.x.toInt()}';
+      evt['y'] = '${pos.y.toInt()}';
     }
 
     Map<int, String> mapButtons = {
@@ -1330,32 +1382,55 @@ class InputModel {
       y = pos.dy;
     }
 
-    var evtX = 0;
-    var evtY = 0;
-    try {
-      evtX = x.round();
-      evtY = y.round();
-    } catch (e) {
-      debugPrintStack(label: 'canvas.scale value ${canvas.scale}, $e');
-      return null;
-    }
+    return InputModel.getPointInRemoteRect(
+        true, peerPlatform, kind, evtType, x, y, rect,
+        buttons: buttons);
+  }
 
-    int minX = rect.left.toInt();
+  static Point<double>? getPointInRemoteRect(
+      bool isLocalDesktop,
+      String? peerPlatform,
+      String kind,
+      String evtType,
+      double evtX,
+      double evtY,
+      Rect rect,
+      {int buttons = kPrimaryMouseButton}) {
+    double minX = rect.left;
     // https://github.com/rustdesk/rustdesk/issues/6678
     // For Windows, [0,maxX], [0,maxY] should be set to enable window snapping.
-    int maxX = (rect.left + rect.width).toInt() -
+    double maxX = (rect.left + rect.width) -
         (peerPlatform == kPeerPlatformWindows ? 0 : 1);
-    int minY = rect.top.toInt();
-    int maxY = (rect.top + rect.height).toInt() -
+    double minY = rect.top;
+    double maxY = (rect.top + rect.height) -
         (peerPlatform == kPeerPlatformWindows ? 0 : 1);
-    evtX = trySetNearestRange(evtX, minX, maxX, 5);
-    evtY = trySetNearestRange(evtY, minY, maxY, 5);
-    if (kind == kPointerEventKindMouse) {
-      if (evtX < minX || evtY < minY || evtX > maxX || evtY > maxY) {
-        // If left mouse up, no early return.
-        if (!(buttons == kPrimaryMouseButton && evtType == 'up')) {
-          return null;
+    evtX = InputModel.tryGetNearestRange(evtX, minX, maxX, 5);
+    evtY = InputModel.tryGetNearestRange(evtY, minY, maxY, 5);
+    if (isLocalDesktop) {
+      if (kind == kPointerEventKindMouse) {
+        if (evtX < minX || evtY < minY || evtX > maxX || evtY > maxY) {
+          // If left mouse up, no early return.
+          if (!(buttons == kPrimaryMouseButton &&
+              evtType == kMouseEventTypeUp)) {
+            return null;
+          }
         }
+      }
+    } else {
+      bool evtXInRange = evtX >= minX && evtX <= maxX;
+      bool evtYInRange = evtY >= minY && evtY <= maxY;
+      if (!(evtXInRange || evtYInRange)) {
+        return null;
+      }
+      if (evtX < minX) {
+        evtX = minX;
+      } else if (evtX > maxX) {
+        evtX = maxX;
+      }
+      if (evtY < minY) {
+        evtY = minY;
+      } else if (evtY > maxY) {
+        evtY = maxY;
       }
     }
 
@@ -1371,7 +1446,18 @@ class InputModel {
     }
   }
 
-  void onMobileBack() => tap(MouseButtons.right);
+  void onMobileBack() {
+    final minBackButtonVersion = "1.3.8";
+    final peerVersion =
+        parent.target?.ffiModel.pi.version ?? minBackButtonVersion;
+    var btn = MouseButtons.back;
+    // For compatibility with old versions
+    if (versionCmp(peerVersion, minBackButtonVersion) < 0) {
+      btn = MouseButtons.right;
+    }
+    tap(btn);
+  }
+
   void onMobileHome() => tap(MouseButtons.wheel);
   Future<void> onMobileApps() async {
     sendMouse('down', MouseButtons.wheel);

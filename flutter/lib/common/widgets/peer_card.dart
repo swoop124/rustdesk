@@ -58,27 +58,33 @@ class _PeerCardState extends State<_PeerCard>
         stateGlobal.isPortrait.isTrue ? _buildPortrait() : _buildLandscape());
   }
 
+  Widget gestureDetector({required Widget child}) {
+    final PeerTabModel peerTabModel = Provider.of(context);
+    final peer = super.widget.peer;
+    return GestureDetector(
+        onDoubleTap: peerTabModel.multiSelectionMode
+            ? null
+            : () => widget.connect(context, peer.id),
+        onTap: () {
+          if (peerTabModel.multiSelectionMode) {
+            peerTabModel.select(peer);
+          } else {
+            if (isMobile) {
+              widget.connect(context, peer.id);
+            } else {
+              peerTabModel.select(peer);
+            }
+          }
+        },
+        onLongPress: () => peerTabModel.select(peer),
+        child: child);
+  }
+
   Widget _buildPortrait() {
     final peer = super.widget.peer;
-    final PeerTabModel peerTabModel = Provider.of(context);
     return Card(
         margin: EdgeInsets.symmetric(horizontal: 2),
-        child: GestureDetector(
-          onTap: () {
-            if (peerTabModel.multiSelectionMode) {
-              peerTabModel.select(peer);
-            } else {
-              if (!isWebDesktop) {
-                connectInPeerTab(context, peer, widget.tab);
-              }
-            }
-          },
-          onDoubleTap: isWebDesktop
-              ? () => connectInPeerTab(context, peer, widget.tab)
-              : null,
-          onLongPress: () {
-            peerTabModel.select(peer);
-          },
+        child: gestureDetector(
           child: Container(
               padding: EdgeInsets.only(left: 12, top: 8, bottom: 8),
               child: _buildPeerTile(context, peer, null)),
@@ -86,7 +92,6 @@ class _PeerCardState extends State<_PeerCard>
   }
 
   Widget _buildLandscape() {
-    final PeerTabModel peerTabModel = Provider.of(context);
     final peer = super.widget.peer;
     var deco = Rx<BoxDecoration?>(
       BoxDecoration(
@@ -115,30 +120,21 @@ class _PeerCardState extends State<_PeerCard>
           ),
         );
       },
-      child: GestureDetector(
-          onDoubleTap:
-              peerTabModel.multiSelectionMode || peerTabModel.isShiftDown
-                  ? null
-                  : () => widget.connect(context, peer.id),
-          onTap: () => peerTabModel.select(peer),
-          onLongPress: () => peerTabModel.select(peer),
+      child: gestureDetector(
           child: Obx(() => peerCardUiType.value == PeerUiType.grid
               ? _buildPeerCard(context, peer, deco)
               : _buildPeerTile(context, peer, deco))),
     );
   }
 
-  Widget _buildPeerTile(
-      BuildContext context, Peer peer, Rx<BoxDecoration?>? deco) {
-    hideUsernameOnCard ??=
-        bind.mainGetBuildinOption(key: kHideUsernameOnCard) == 'Y';
+  makeChild(bool isPortrait, Peer peer) {
     final name = hideUsernameOnCard == true
         ? peer.hostname
         : '${peer.username}${peer.username.isNotEmpty && peer.hostname.isNotEmpty ? '@' : ''}${peer.hostname}';
     final greyStyle = TextStyle(
         fontSize: 11,
         color: Theme.of(context).textTheme.titleLarge?.color?.withOpacity(0.6));
-    makeChild(bool isPortrait) => Row(
+    return Row(
       mainAxisSize: MainAxisSize.max,
       children: [
         Container(
@@ -210,6 +206,12 @@ class _PeerCardState extends State<_PeerCard>
         )
       ],
     );
+  }
+
+  Widget _buildPeerTile(
+      BuildContext context, Peer peer, Rx<BoxDecoration?>? deco) {
+    hideUsernameOnCard ??=
+        bind.mainGetBuildinOption(key: kHideUsernameOnCard) == 'Y';
     final colors = _frontN(peer.tags, 25)
         .map((e) => gFFI.abModel.getCurrentAbTagColor(e))
         .toList();
@@ -220,21 +222,22 @@ class _PeerCardState extends State<_PeerCard>
               ? '${translate('Tags')}: ${peer.tags.join(', ')}'
               : '',
       child: Stack(children: [
-        Obx(() => deco == null
-            ? makeChild(stateGlobal.isPortrait.isTrue)
-            : Container(
+        Obx(
+          () => deco == null
+              ? makeChild(stateGlobal.isPortrait.isTrue, peer)
+              : Container(
                   foregroundDecoration: deco.value,
-                  child: makeChild(stateGlobal.isPortrait.isTrue),
+                  child: makeChild(stateGlobal.isPortrait.isTrue, peer),
                 ),
-              ),
+        ),
         if (colors.isNotEmpty)
-          Obx(()=> Positioned(
-            top: 2,
-            right: stateGlobal.isPortrait.isTrue ? 20 : 10,
-            child: CustomPaint(
-              painter: TagPainter(radius: 3, colors: colors),
-            ),
-          ))
+          Obx(() => Positioned(
+                top: 2,
+                right: stateGlobal.isPortrait.isTrue ? 20 : 10,
+                child: CustomPaint(
+                  painter: TagPainter(radius: 3, colors: colors),
+                ),
+              ))
       ]),
     );
   }
@@ -485,6 +488,7 @@ abstract class BasePeerCard extends StatelessWidget {
     BuildContext context,
     String title, {
     bool isFileTransfer = false,
+    bool isViewCamera = false,
     bool isTcpTunneling = false,
     bool isRDP = false,
   }) {
@@ -499,6 +503,7 @@ abstract class BasePeerCard extends StatelessWidget {
           peer,
           tab,
           isFileTransfer: isFileTransfer,
+          isViewCamera: isViewCamera,
           isTcpTunneling: isTcpTunneling,
           isRDP: isRDP,
         );
@@ -524,6 +529,15 @@ abstract class BasePeerCard extends StatelessWidget {
       context,
       translate('Transfer file'),
       isFileTransfer: true,
+    );
+  }
+
+  @protected
+  MenuEntryBase<String> _viewCameraAction(BuildContext context) {
+    return _connectCommonAction(
+      context,
+      translate('View camera'),
+      isViewCamera: true,
     );
   }
 
@@ -713,18 +727,18 @@ abstract class BasePeerCard extends StatelessWidget {
           switch (tab) {
             case PeerTabIndex.recent:
               await bind.mainRemovePeer(id: id);
-              await bind.mainLoadRecentPeers();
+              bind.mainLoadRecentPeers();
               break;
             case PeerTabIndex.fav:
               final favs = (await bind.mainGetFav()).toList();
               if (favs.remove(id)) {
                 await bind.mainStoreFav(favs: favs);
-                await bind.mainLoadFavPeers();
+                bind.mainLoadFavPeers();
               }
               break;
             case PeerTabIndex.lan:
               await bind.mainRemoveDiscovered(id: id);
-              await bind.mainLoadLanPeers();
+              bind.mainLoadLanPeers();
               break;
             case PeerTabIndex.ab:
               await gFFI.abModel.deletePeers([id]);
@@ -876,7 +890,8 @@ class RecentPeerCard extends BasePeerCard {
       BuildContext context) async {
     final List<MenuEntryBase<String>> menuItems = [
       _connectAction(context),
-      if (!isWeb) _transferFileAction(context),
+      _transferFileAction(context),
+      _viewCameraAction(context),
     ];
 
     final List favs = (await bind.mainGetFav()).toList();
@@ -935,7 +950,8 @@ class FavoritePeerCard extends BasePeerCard {
       BuildContext context) async {
     final List<MenuEntryBase<String>> menuItems = [
       _connectAction(context),
-      if (!isWeb) _transferFileAction(context),
+      _transferFileAction(context),
+      _viewCameraAction(context),
     ];
     if (isDesktop && peer.platform != kPeerPlatformAndroid) {
       menuItems.add(_tcpTunnelingAction(context));
@@ -988,7 +1004,8 @@ class DiscoveredPeerCard extends BasePeerCard {
       BuildContext context) async {
     final List<MenuEntryBase<String>> menuItems = [
       _connectAction(context),
-      if (!isWeb) _transferFileAction(context),
+      _transferFileAction(context),
+      _viewCameraAction(context),
     ];
 
     final List favs = (await bind.mainGetFav()).toList();
@@ -1041,7 +1058,8 @@ class AddressBookPeerCard extends BasePeerCard {
       BuildContext context) async {
     final List<MenuEntryBase<String>> menuItems = [
       _connectAction(context),
-      if (!isWeb) _transferFileAction(context),
+      _transferFileAction(context),
+      _viewCameraAction(context),
     ];
     if (isDesktop && peer.platform != kPeerPlatformAndroid) {
       menuItems.add(_tcpTunnelingAction(context));
@@ -1173,7 +1191,8 @@ class MyGroupPeerCard extends BasePeerCard {
       BuildContext context) async {
     final List<MenuEntryBase<String>> menuItems = [
       _connectAction(context),
-      if (!isWeb) _transferFileAction(context),
+      _transferFileAction(context),
+      _viewCameraAction(context),
     ];
     if (isDesktop && peer.platform != kPeerPlatformAndroid) {
       menuItems.add(_tcpTunnelingAction(context));
@@ -1254,59 +1273,58 @@ void _rdpDialog(String id) async {
                         hintText: '3389'),
                     controller: portController,
                     autofocus: true,
-                  ),
+                  ).workaroundFreezeLinuxMint(),
                 ),
               ],
             ).marginOnly(bottom: isDesktop ? 8 : 0),
             Obx(() => Row(
-              children: [
-                stateGlobal.isPortrait.isFalse
-                    ? ConstrainedBox(
-                        constraints: const BoxConstraints(minWidth: 140),
-                        child: Text(
-                          "${translate('Username')}:",
-                          textAlign: TextAlign.right,
-                        ).marginOnly(right: 10))
-                    : SizedBox.shrink(),
-                Expanded(
-                  child: TextField(
-                    decoration: InputDecoration(
-                        labelText: isDesktop
-                            ? null
-                            : translate('Username')),
-                    controller: userController,
-                  ),
-                ),
-              ],
-            ).marginOnly(bottom: stateGlobal.isPortrait.isFalse ? 8 : 0)),
-            Obx(() => Row(
-              children: [
-                stateGlobal.isPortrait.isFalse
-                    ? ConstrainedBox(
-                        constraints: const BoxConstraints(minWidth: 140),
-                        child: Text(
-                          "${translate('Password')}:",
-                          textAlign: TextAlign.right,
-                        ).marginOnly(right: 10))
-                    : SizedBox.shrink(),
-                Expanded(
-                  child: Obx(() => TextField(
-                        obscureText: secure.value,
-                        maxLength: maxLength,
+                  children: [
+                    stateGlobal.isPortrait.isFalse
+                        ? ConstrainedBox(
+                            constraints: const BoxConstraints(minWidth: 140),
+                            child: Text(
+                              "${translate('Username')}:",
+                              textAlign: TextAlign.right,
+                            ).marginOnly(right: 10))
+                        : SizedBox.shrink(),
+                    Expanded(
+                      child: TextField(
                         decoration: InputDecoration(
-                            labelText: isDesktop
-                                ? null
-                                : translate('Password'),
-                            suffixIcon: IconButton(
-                                onPressed: () => secure.value = !secure.value,
-                                icon: Icon(secure.value
-                                    ? Icons.visibility_off
-                                    : Icons.visibility))),
-                        controller: passwordController,
-                      )),
-                ),
-              ],
-            ))
+                            labelText:
+                                isDesktop ? null : translate('Username')),
+                        controller: userController,
+                      ).workaroundFreezeLinuxMint(),
+                    ),
+                  ],
+                ).marginOnly(bottom: stateGlobal.isPortrait.isFalse ? 8 : 0)),
+            Obx(() => Row(
+                  children: [
+                    stateGlobal.isPortrait.isFalse
+                        ? ConstrainedBox(
+                            constraints: const BoxConstraints(minWidth: 140),
+                            child: Text(
+                              "${translate('Password')}:",
+                              textAlign: TextAlign.right,
+                            ).marginOnly(right: 10))
+                        : SizedBox.shrink(),
+                    Expanded(
+                      child: Obx(() => TextField(
+                            obscureText: secure.value,
+                            maxLength: maxLength,
+                            decoration: InputDecoration(
+                                labelText:
+                                    isDesktop ? null : translate('Password'),
+                                suffixIcon: IconButton(
+                                    onPressed: () =>
+                                        secure.value = !secure.value,
+                                    icon: Icon(secure.value
+                                        ? Icons.visibility_off
+                                        : Icons.visibility))),
+                            controller: passwordController,
+                          ).workaroundFreezeLinuxMint()),
+                    ),
+                  ],
+                ))
           ],
         ),
       ),
@@ -1396,6 +1414,7 @@ class TagPainter extends CustomPainter {
 
 void connectInPeerTab(BuildContext context, Peer peer, PeerTabIndex tab,
     {bool isFileTransfer = false,
+    bool isViewCamera = false,
     bool isTcpTunneling = false,
     bool isRDP = false}) async {
   var password = '';
@@ -1421,6 +1440,7 @@ void connectInPeerTab(BuildContext context, Peer peer, PeerTabIndex tab,
       password: password,
       isSharedPassword: isSharedPassword,
       isFileTransfer: isFileTransfer,
+      isViewCamera: isViewCamera,
       isTcpTunneling: isTcpTunneling,
       isRDP: isRDP);
 }

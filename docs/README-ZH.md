@@ -135,8 +135,8 @@ docker build -t "rustdesk-builder" . # 构建容器
       ```
       在Dockerfile的RUN apt update之前插入两行：
    
-      RUN sed -i "s/deb.debian.org/mirrors.163.com/g" /etc/apt/sources.list
-      RUN sed -i "s/security.debian.org/mirrors.163.com/g" /etc/apt/sources.list
+      RUN sed -i "s|deb.debian.org|mirrors.aliyun.com|g" /etc/apt/sources.list && \
+          sed -i "s|security.debian.org|mirrors.aliyun.com|g" /etc/apt/sources.list
       ```
 
    2. 修改容器系统中的 cargo 源，在`RUN ./rustup.sh -y`后插入下面代码：
@@ -217,6 +217,10 @@ target/release/rustdesk
 - **[src/platform](https://github.com/rustdesk/rustdesk/tree/master/src/platform)**: 平台服务相关代码
 - **[flutter](https://github.com/rustdesk/rustdesk/tree/master/flutter)**: 适用于桌面和移动设备的 Flutter 代码
 - **[flutter/web/js](https://github.com/rustdesk/rustdesk/tree/master/flutter/web/js)**: Flutter Web版本中的Javascript代码
+
+> [!警告]
+> **免责声明:** <br>
+> RustDesk 的开发人员不纵容或支持任何不道德或非法的软件使用行为。滥用行为，例如未经授权的访问、控制或侵犯隐私，严格违反我们的准则。作者对应用程序的任何滥用行为概不负责。
 
 ## 截图
 

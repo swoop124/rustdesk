@@ -305,7 +305,7 @@ class RemoteMenuEntry {
   }) {
     return MenuEntryButton<String>(
       childBuilder: (TextStyle? style) => Text(
-        '${translate("Insert")} Ctrl + Alt + Del',
+        translate("Insert Ctrl + Alt + Del"),
         style: style,
       ),
       proc: () {
@@ -436,6 +436,7 @@ class _RemoteToolbarState extends State<RemoteToolbar> {
             shadowColor: MyTheme.color(context).shadow,
             borderRadius: borderRadius,
             child: _DraggableShowHide(
+              id: widget.id,
               sessionId: widget.ffi.sessionId,
               dragging: _dragging,
               fractionX: _fractionX,
@@ -477,9 +478,12 @@ class _RemoteToolbarState extends State<RemoteToolbar> {
       state: widget.state,
       setFullscreen: _setFullscreen,
     ));
-    toolbarItems.add(_KeyboardMenu(id: widget.id, ffi: widget.ffi));
+    // Do not show keyboard for camera connection type.
+    if (widget.ffi.connType == ConnType.defaultConn) {
+      toolbarItems.add(_KeyboardMenu(id: widget.id, ffi: widget.ffi));
+    }
+    toolbarItems.add(_ChatMenu(id: widget.id, ffi: widget.ffi));
     if (!isWeb) {
-      toolbarItems.add(_ChatMenu(id: widget.id, ffi: widget.ffi));
       toolbarItems.add(_VoiceCallMenu(id: widget.id, ffi: widget.ffi));
     }
     if (!isWeb) toolbarItems.add(_RecordMenu());
@@ -1042,23 +1046,26 @@ class _DisplayMenuState extends State<_DisplayMenu> {
         scrollStyle(),
         imageQuality(),
         codec(),
-        _ResolutionsMenu(
-          id: widget.id,
-          ffi: widget.ffi,
-          screenAdjustor: _screenAdjustor,
-        ),
-        if (showVirtualDisplayMenu(ffi))
+        if (ffi.connType == ConnType.defaultConn)
+          _ResolutionsMenu(
+            id: widget.id,
+            ffi: widget.ffi,
+            screenAdjustor: _screenAdjustor,
+          ),
+        if (showVirtualDisplayMenu(ffi) && ffi.connType == ConnType.defaultConn)
           _SubmenuButton(
             ffi: widget.ffi,
             menuChildren: getVirtualDisplayMenuChildren(ffi, id, null),
             child: Text(translate("Virtual display")),
           ),
-        cursorToggles(),
+        if (ffi.connType == ConnType.defaultConn) cursorToggles(),
         Divider(),
         toggles(),
       ];
       // privacy mode
-      if (ffiModel.keyboard && pi.features.privacyMode) {
+      if (ffi.connType == ConnType.defaultConn &&
+          ffiModel.keyboard &&
+          pi.features.privacyMode) {
         final privacyModeState = PrivacyModeState.find(id);
         final privacyModeList =
             toolbarPrivacyMode(privacyModeState, context, id, ffi);
@@ -1084,7 +1091,9 @@ class _DisplayMenuState extends State<_DisplayMenu> {
           ]);
         }
       }
-      menuChildren.add(widget.pluginItem);
+      if (ffi.connType == ConnType.defaultConn) {
+        menuChildren.add(widget.pluginItem);
+      }
       return menuChildren;
     }
 
@@ -1494,7 +1503,7 @@ class _ResolutionsMenuState extends State<_ResolutionsMenu> {
     );
   }
 
-  TextField _resolutionInput(TextEditingController controller) {
+  Widget _resolutionInput(TextEditingController controller) {
     return TextField(
       decoration: InputDecoration(
         border: InputBorder.none,
@@ -1508,7 +1517,7 @@ class _ResolutionsMenuState extends State<_ResolutionsMenu> {
         FilteringTextInputFormatter.allow(RegExp(r'[0-9]')),
       ],
       controller: controller,
-    );
+    ).workaroundFreezeLinuxMint();
   }
 
   List<Widget> _supportedResolutionMenuButtons() => resolutions
@@ -1780,34 +1789,49 @@ class _ChatMenuState extends State<_ChatMenu> {
 
   @override
   Widget build(BuildContext context) {
-    return _IconSubmenuButton(
-        tooltip: 'Chat',
-        key: chatButtonKey,
-        svg: 'assets/chat.svg',
-        ffi: widget.ffi,
-        color: _ToolbarTheme.blueColor,
-        hoverColor: _ToolbarTheme.hoverBlueColor,
-        menuChildrenGetter: () => [textChat(), voiceCall()]);
+    if (isWeb) {
+      return buildTextChatButton();
+    } else {
+      return _IconSubmenuButton(
+          tooltip: 'Chat',
+          key: chatButtonKey,
+          svg: 'assets/chat.svg',
+          ffi: widget.ffi,
+          color: _ToolbarTheme.blueColor,
+          hoverColor: _ToolbarTheme.hoverBlueColor,
+          menuChildrenGetter: () => [textChat(), voiceCall()]);
+    }
+  }
+
+  buildTextChatButton() {
+    return _IconMenuButton(
+      assetName: 'assets/message_24dp_5F6368.svg',
+      tooltip: 'Text chat',
+      key: chatButtonKey,
+      onPressed: _textChatOnPressed,
+      color: _ToolbarTheme.blueColor,
+      hoverColor: _ToolbarTheme.hoverBlueColor,
+    );
   }
 
   textChat() {
     return MenuButton(
         child: Text(translate('Text chat')),
         ffi: widget.ffi,
-        onPressed: () {
-          RenderBox? renderBox =
-              chatButtonKey.currentContext?.findRenderObject() as RenderBox?;
+        onPressed: _textChatOnPressed);
+  }
 
-          Offset? initPos;
-          if (renderBox != null) {
-            final pos = renderBox.localToGlobal(Offset.zero);
-            initPos = Offset(pos.dx, pos.dy + _ToolbarTheme.dividerHeight);
-          }
-
-          widget.ffi.chatModel.changeCurrentKey(
-              MessageKey(widget.ffi.id, ChatModel.clientModeID));
-          widget.ffi.chatModel.toggleChatOverlay(chatInitPos: initPos);
-        });
+  _textChatOnPressed() {
+    RenderBox? renderBox =
+        chatButtonKey.currentContext?.findRenderObject() as RenderBox?;
+    Offset? initPos;
+    if (renderBox != null) {
+      final pos = renderBox.localToGlobal(Offset.zero);
+      initPos = Offset(pos.dx, pos.dy + _ToolbarTheme.dividerHeight);
+    }
+    widget.ffi.chatModel
+        .changeCurrentKey(MessageKey(widget.ffi.id, ChatModel.clientModeID));
+    widget.ffi.chatModel.toggleChatOverlay(chatInitPos: initPos);
   }
 
   voiceCall() {
@@ -1908,8 +1932,7 @@ class _RecordMenu extends StatelessWidget {
     var ffi = Provider.of<FfiModel>(context);
     var recordingModel = Provider.of<RecordingModel>(context);
     final visible =
-        (recordingModel.start || ffi.permissions['recording'] != false) &&
-            ffi.pi.currentDisplay != kAllDisplayValue;
+        (recordingModel.start || ffi.permissions['recording'] != false);
     if (!visible) return Offstage();
     return _IconMenuButton(
       assetName: 'assets/rec.svg',
@@ -2218,6 +2241,7 @@ class RdoMenuButton<T> extends StatelessWidget {
 }
 
 class _DraggableShowHide extends StatefulWidget {
+  final String id;
   final SessionID sessionId;
   final RxDouble fractionX;
   final RxBool dragging;
@@ -2229,6 +2253,7 @@ class _DraggableShowHide extends StatefulWidget {
 
   const _DraggableShowHide({
     Key? key,
+    required this.id,
     required this.sessionId,
     required this.fractionX,
     required this.dragging,
@@ -2318,15 +2343,33 @@ class _DraggableShowHideState extends State<_DraggableShowHide> {
     );
     final isFullscreen = stateGlobal.fullscreen;
     const double iconSize = 20;
+
+    buttonWrapper(VoidCallback? onPressed, Widget child,
+        {Color hoverColor = _ToolbarTheme.blueColor}) {
+      final bgColor = buttonStyle.backgroundColor?.resolve({});
+      return TextButton(
+        onPressed: onPressed,
+        child: child,
+        style: buttonStyle.copyWith(
+          backgroundColor: MaterialStateProperty.resolveWith((states) {
+            if (states.contains(MaterialState.hovered)) {
+              return (bgColor ?? hoverColor).withOpacity(0.15);
+            }
+            return bgColor;
+          }),
+        ),
+      );
+    }
+
     final child = Row(
       mainAxisSize: MainAxisSize.min,
       children: [
         _buildDraggable(context),
-        Obx(() => TextButton(
-              onPressed: () {
+        Obx(() => buttonWrapper(
+              () {
                 widget.setFullscreen(!isFullscreen.value);
               },
-              child: Tooltip(
+              Tooltip(
                 message: translate(
                     isFullscreen.isTrue ? 'Exit Fullscreen' : 'Fullscreen'),
                 child: Icon(
@@ -2337,12 +2380,12 @@ class _DraggableShowHideState extends State<_DraggableShowHide> {
                 ),
               ),
             )),
-        if (!isMacOS)
+        if (!isMacOS && !isWebDesktop)
           Obx(() => Offstage(
                 offstage: isFullscreen.isFalse,
-                child: TextButton(
-                  onPressed: () => widget.setMinimize(),
-                  child: Tooltip(
+                child: buttonWrapper(
+                  widget.setMinimize,
+                  Tooltip(
                     message: translate('Minimize'),
                     child: Icon(
                       Icons.remove,
@@ -2351,11 +2394,11 @@ class _DraggableShowHideState extends State<_DraggableShowHide> {
                   ),
                 ),
               )),
-        TextButton(
-          onPressed: () => setState(() {
+        buttonWrapper(
+          () => setState(() {
             widget.toolbarState.switchShow(widget.sessionId);
           }),
-          child: Obx((() => Tooltip(
+          Obx((() => Tooltip(
                 message:
                     translate(show.isTrue ? 'Hide Toolbar' : 'Show Toolbar'),
                 child: Icon(
@@ -2364,6 +2407,25 @@ class _DraggableShowHideState extends State<_DraggableShowHide> {
                 ),
               ))),
         ),
+        if (isWebDesktop)
+          Obx(() {
+            if (show.isTrue) {
+              return Offstage();
+            } else {
+              return buttonWrapper(
+                () => closeConnection(id: widget.id),
+                Tooltip(
+                  message: translate('Close'),
+                  child: Icon(
+                    Icons.close,
+                    size: iconSize,
+                    color: _ToolbarTheme.redColor,
+                  ),
+                ),
+                hoverColor: _ToolbarTheme.redColor,
+              ).paddingOnly(left: iconSize / 2);
+            }
+          })
       ],
     );
     return TextButtonTheme(
