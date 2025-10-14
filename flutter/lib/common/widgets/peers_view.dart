@@ -71,10 +71,12 @@ class _PeersView extends StatefulWidget {
   final Peers peers;
   final PeerFilter? peerFilter;
   final PeerCardBuilder peerCardBuilder;
+  final PeerTabIndex peerTabIndex;
 
   const _PeersView(
       {required this.peers,
       required this.peerCardBuilder,
+      required this.peerTabIndex,
       this.peerFilter,
       Key? key})
       : super(key: key);
@@ -395,8 +397,8 @@ class _PeersViewState extends State<_PeersView>
       return peers;
     }
     searchText = searchText.toLowerCase();
-    final matches =
-        await Future.wait(peers.map((peer) => matchPeer(searchText, peer)));
+    final matches = await Future.wait(
+        peers.map((peer) => matchPeer(searchText, peer, widget.peerTabIndex)));
     final filteredList = List<Peer>.empty(growable: true);
     for (var i = 0; i < peers.length; i++) {
       if (matches[i]) {
@@ -441,7 +443,10 @@ abstract class BasePeersView extends StatelessWidget {
         break;
     }
     return _PeersView(
-        peers: peers, peerFilter: peerFilter, peerCardBuilder: peerCardBuilder);
+        peers: peers,
+        peerFilter: peerFilter,
+        peerCardBuilder: peerCardBuilder,
+        peerTabIndex: peerTabIndex);
   }
 }
 
@@ -501,6 +506,7 @@ class DiscoveredPeersView extends BasePeersView {
   Widget build(BuildContext context) {
     final widget = super.build(context);
     bind.mainLoadLanPeers();
+    bind.mainDiscover();
     return widget;
   }
 }

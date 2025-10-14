@@ -54,6 +54,7 @@ enum DesktopTabType {
   fileTransfer,
   viewCamera,
   portForward,
+  terminal,
   install,
 }
 
@@ -291,7 +292,6 @@ class DesktopTab extends StatefulWidget {
 // ignore: must_be_immutable
 class _DesktopTabState extends State<DesktopTab>
     with MultiWindowListener, WindowListener {
-  final _saveFrameDebounce = Debouncer(delay: Duration(seconds: 1));
   Timer? _macOSCheckRestoreTimer;
   int _macOSCheckRestoreCounter = 0;
 
@@ -369,7 +369,7 @@ class _DesktopTabState extends State<DesktopTab>
 
   void _setMaximized(bool maximize) {
     stateGlobal.setMaximized(maximize);
-    _saveFrameDebounce.call(_saveFrame);
+    _saveFrame();
     setState(() {});
   }
 
@@ -404,24 +404,24 @@ class _DesktopTabState extends State<DesktopTab>
     super.onWindowUnmaximize();
   }
 
-  _saveFrame() async {
+  _saveFrame({bool? flush}) async {
     if (tabType == DesktopTabType.main) {
-      await saveWindowPosition(WindowType.Main);
+      await saveWindowPosition(WindowType.Main, flush: flush);
     } else if (kWindowType != null && kWindowId != null) {
-      await saveWindowPosition(kWindowType!, windowId: kWindowId);
+      await saveWindowPosition(kWindowType!, windowId: kWindowId, flush: flush);
     }
   }
 
   @override
   void onWindowMoved() {
-    _saveFrameDebounce.call(_saveFrame);
+    _saveFrame();
     super.onWindowMoved();
   }
 
   @override
   void onWindowResized() {
-    _saveFrameDebounce.call(_saveFrame);
-    super.onWindowMoved();
+    _saveFrame();
+    super.onWindowResized();
   }
 
   @override
@@ -458,6 +458,8 @@ class _DesktopTabState extends State<DesktopTab>
         }
       });
     }
+
+    await _saveFrame(flush: true);
 
     // hide window on close
     if (isMainWindow) {
@@ -651,7 +653,9 @@ class _DesktopTabState extends State<DesktopTab>
                                     controller.state.value.scrollController;
                                 if (!sc.canScroll) return;
                                 _scrollDebounce.call(() {
-                                  sc.animateTo(sc.offset + e.scrollDelta.dy,
+                                  double adjust = 2.5;
+                                  sc.animateTo(
+                                      sc.offset + e.scrollDelta.dy * adjust,
                                       duration: Duration(milliseconds: 200),
                                       curve: Curves.ease);
                                 });

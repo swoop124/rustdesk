@@ -3,6 +3,7 @@ use std::{
     sync::{Arc, Mutex},
 };
 
+#[cfg(any(target_os = "windows", target_os = "linux"))]
 use nokhwa::{
     pixel_format::RgbAFormat,
     query,
@@ -16,12 +17,17 @@ use hbb_common::message_proto::{DisplayInfo, Resolution};
 use crate::AdapterDevice;
 
 use crate::common::{bail, ResultType};
-use crate::{Frame, PixelBuffer, Pixfmt, TraitCapturer};
+use crate::{Frame, TraitCapturer};
+#[cfg(any(target_os = "windows", target_os = "linux"))]
+use crate::{PixelBuffer, Pixfmt};
 
 pub const PRIMARY_CAMERA_IDX: usize = 0;
 lazy_static::lazy_static! {
     static ref SYNC_CAMERA_DISPLAYS: Arc<Mutex<Vec<DisplayInfo>>> = Arc::new(Mutex::new(Vec::new()));
 }
+
+#[cfg(not(any(target_os = "windows", target_os = "linux")))]
+const CAMERA_NOT_SUPPORTED: &str = "This platform doesn't support camera yet";
 
 pub struct Cameras;
 
@@ -30,12 +36,9 @@ pub fn primary_camera_exists() -> bool {
     Cameras::exists(PRIMARY_CAMERA_IDX)
 }
 
+#[cfg(any(target_os = "windows", target_os = "linux"))]
 impl Cameras {
     pub fn all_info() -> ResultType<Vec<DisplayInfo>> {
-        // TODO: support more platforms.
-        #[cfg(not(any(target_os = "linux", target_os = "windows")))]
-        return Ok(Vec::new());
-
         match query(ApiBackend::Auto) {
             Ok(cameras) => {
                 let mut camera_displays = SYNC_CAMERA_DISPLAYS.lock().unwrap();
@@ -48,7 +51,18 @@ impl Cameras {
                         let Some(info) = cameras.first() else {
                             bail!("No camera found")
                         };
-                        let camera = Self::create_camera(info.index())?;
+                        // Use index (0) camera as main camera, fallback to the first camera if index (0) is not available.
+                        // But maybe we also need to check index (1) or the lowest index camera.
+                        //
+                        // https://askubuntu.com/questions/234362/how-to-fix-this-problem-where-sometimes-dev-video0-becomes-automatically-dev
+                        // https://github.com/rustdesk/rustdesk/pull/12010#issue-3125329069
+                        let mut camera_index = info.index().clone();
+                        if !matches!(camera_index, CameraIndex::Index(0)) {
+                            if cameras.iter().any(|cam| matches!(cam.index(), CameraIndex::Index(0))) {
+                                camera_index = CameraIndex::Index(0);
+                            }
+                        }
+                        let camera = Self::create_camera(&camera_index)?;
                         let resolution = camera.resolution();
                         let (width, height) = (resolution.width() as i32, resolution.height() as i32);
                         camera_displays.push(DisplayInfo {
@@ -102,10 +116,6 @@ impl Cameras {
     }
 
     pub fn exists(index: usize) -> bool {
-        // TODO: support more platforms.
-        #[cfg(not(any(target_os = "linux", target_os = "windows")))]
-        return false;
-
         match query(ApiBackend::Auto) {
             Ok(cameras) => index < cameras.len(),
             _ => return false,
@@ -113,13 +123,14 @@ impl Cameras {
     }
 
     fn create_camera(index: &CameraIndex) -> ResultType<Camera> {
-        // TODO: support more platforms.
-        #[cfg(not(any(target_os = "linux", target_os = "windows")))]
-        bail!("This platform doesn't support camera yet");
-
+        let format_type = if cfg!(target_os = "linux") {
+            RequestedFormatType::None
+        } else {
+            RequestedFormatType::AbsoluteHighestResolution
+        };
         let result = Camera::new(
             index.clone(),
-            RequestedFormat::new::<RgbAFormat>(RequestedFormatType::AbsoluteHighestResolution),
+            RequestedFormat::new::<RgbAFormat>(format_type),
         );
         match result {
             Ok(camera) => Ok(camera),
@@ -147,13 +158,41 @@ impl Cameras {
     }
 }
 
+#[cfg(not(any(target_os = "windows", target_os = "linux")))]
+impl Cameras {
+    pub fn all_info() -> ResultType<Vec<DisplayInfo>> {
+        return Ok(Vec::new());
+    }
+
+    pub fn exists(_index: usize) -> bool {
+        false
+    }
+
+    pub fn get_camera_resolution(_index: usize) -> ResultType<Resolution> {
+        bail!(CAMERA_NOT_SUPPORTED);
+    }
+
+    pub fn get_sync_cameras() -> Vec<DisplayInfo> {
+        vec![]
+    }
+
+    pub fn get_capturer(_current: usize) -> ResultType<Box<dyn TraitCapturer>> {
+        bail!(CAMERA_NOT_SUPPORTED);
+    }
+}
+
+#[cfg(any(target_os = "windows", target_os = "linux"))]
 pub struct CameraCapturer {
     camera: Camera,
     data: Vec<u8>,
     last_data: Vec<u8>, // for faster compare and copy
 }
 
+#[cfg(not(any(target_os = "windows", target_os = "linux")))]
+pub struct CameraCapturer;
+
 impl CameraCapturer {
+    #[cfg(any(target_os = "windows", target_os = "linux"))]
     fn new(current: usize) -> ResultType<Self> {
         let index = CameraIndex::Index(current as u32);
         let camera = Cameras::create_camera(&index)?;
@@ -163,9 +202,16 @@ impl CameraCapturer {
             last_data: Vec::new(),
         })
     }
+
+    #[allow(dead_code)]
+    #[cfg(not(any(target_os = "windows", target_os = "linux")))]
+    fn new(_current: usize) -> ResultType<Self> {
+        bail!(CAMERA_NOT_SUPPORTED);
+    }
 }
 
 impl TraitCapturer for CameraCapturer {
+    #[cfg(any(target_os = "windows", target_os = "linux"))]
     fn frame<'a>(&'a mut self, _timeout: std::time::Duration) -> std::io::Result<Frame<'a>> {
         // TODO: move this check outside `frame`.
         if !self.camera.is_stream_open() {
@@ -210,6 +256,14 @@ impl TraitCapturer for CameraCapturer {
                 format!("Camera frame error: {}", e),
             )),
         }
+    }
+
+    #[cfg(not(any(target_os = "windows", target_os = "linux")))]
+    fn frame<'a>(&'a mut self, _timeout: std::time::Duration) -> std::io::Result<Frame<'a>> {
+        Err(io::Error::new(
+            io::ErrorKind::Other,
+            CAMERA_NOT_SUPPORTED.to_string(),
+        ))
     }
 
     #[cfg(windows)]

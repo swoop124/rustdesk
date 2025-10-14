@@ -30,6 +30,15 @@ enum SortBy {
 class JobID {
   int _count = 0;
   int next() {
+    try {
+      if (!isWeb) {
+        String v = bind.mainGetCommonSync(key: 'transfer-job-id');
+        return int.parse(v);
+      }
+    } catch (e) {
+      debugPrint("Failed to get transfer job id: $e");
+    }
+    // Finally increase the count if on the web or if failed to get the id.
     _count++;
     return _count;
   }

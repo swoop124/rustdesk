@@ -6,6 +6,8 @@ import 'package:flutter/services.dart';
 import 'package:flutter_hbb/common/shared_state.dart';
 import 'package:flutter_hbb/common/widgets/toolbar.dart';
 import 'package:flutter_hbb/consts.dart';
+import 'package:flutter_hbb/mobile/widgets/floating_mouse.dart';
+import 'package:flutter_hbb/mobile/widgets/floating_mouse_widgets.dart';
 import 'package:flutter_hbb/mobile/widgets/gesture_help.dart';
 import 'package:flutter_hbb/models/chat_model.dart';
 import 'package:flutter_keyboard_visibility/flutter_keyboard_visibility.dart';
@@ -40,12 +42,18 @@ void _disableAndroidSoftKeyboard({bool? isKeyboardVisible}) {
 }
 
 class RemotePage extends StatefulWidget {
-  RemotePage({Key? key, required this.id, this.password, this.isSharedPassword})
+  RemotePage(
+      {Key? key,
+      required this.id,
+      this.password,
+      this.isSharedPassword,
+      this.forceRelay})
       : super(key: key);
 
   final String id;
   final String? password;
   final bool? isSharedPassword;
+  final bool? forceRelay;
 
   @override
   State<RemotePage> createState() => _RemotePageState(id);
@@ -89,6 +97,7 @@ class _RemotePageState extends State<RemotePage> with WidgetsBindingObserver {
       widget.id,
       password: widget.password,
       isSharedPassword: widget.isSharedPassword,
+      forceRelay: widget.forceRelay,
     );
     WidgetsBinding.instance.addPostFrameCallback((_) {
       SystemChrome.setEnabledSystemUIMode(SystemUiMode.manual, overlays: []);
@@ -610,6 +619,15 @@ class _RemotePageState extends State<RemotePage> with WidgetsBindingObserver {
           if (showCursorPaint) {
             paints.add(CursorPaint(widget.id));
           }
+          if (gFFI.ffiModel.touchMode) {
+            paints.add(FloatingMouse(
+              ffi: gFFI,
+            ));
+          } else {
+            paints.add(FloatingMouseWidgets(
+              ffi: gFFI,
+            ));
+          }
           return paints;
         }()));
   }
@@ -695,9 +713,9 @@ class _RemotePageState extends State<RemotePage> with WidgetsBindingObserver {
       );
       if (index != null) {
         if (index < mobileActionMenus.length) {
-          mobileActionMenus[index].onPressed.call();
+          mobileActionMenus[index].onPressed?.call();
         } else if (index < mobileActionMenus.length + more.length) {
-          menus[index - mobileActionMenus.length].onPressed.call();
+          menus[index - mobileActionMenus.length].onPressed?.call();
         }
       }
     }();
@@ -770,7 +788,7 @@ class _RemotePageState extends State<RemotePage> with WidgetsBindingObserver {
         elevation: 8,
       );
       if (index != null && index < menus.length) {
-        menus[index].onPressed.call();
+        menus[index].onPressed?.call();
       }
     });
   }
@@ -782,13 +800,15 @@ class _RemotePageState extends State<RemotePage> with WidgetsBindingObserver {
             controller: ScrollController(),
             padding: EdgeInsets.symmetric(vertical: 10),
             child: GestureHelp(
-                touchMode: gFFI.ffiModel.touchMode,
-                onTouchModeChange: (t) {
-                  gFFI.ffiModel.toggleTouchMode();
-                  final v = gFFI.ffiModel.touchMode ? 'Y' : '';
-                  bind.sessionPeerOption(
-                      sessionId: sessionId, name: kOptionTouchMode, value: v);
-                })));
+              touchMode: gFFI.ffiModel.touchMode,
+              onTouchModeChange: (t) {
+                gFFI.ffiModel.toggleTouchMode();
+                final v = gFFI.ffiModel.touchMode ? 'Y' : '';
+                bind.sessionPeerOption(
+                    sessionId: sessionId, name: kOptionTouchMode, value: v);
+              },
+              virtualMouseMode: gFFI.ffiModel.virtualMouseMode,
+            )));
   }
 
   // * Currently mobile does not enable map mode
@@ -1103,7 +1123,7 @@ void showOptions(
     BuildContext context, String id, OverlayDialogManager dialogManager) async {
   var displays = <Widget>[];
   final pi = gFFI.ffiModel.pi;
-  final image = gFFI.ffiModel.getConnectionImage();
+  final image = gFFI.ffiModel.getConnectionImageText();
   if (image != null) {
     displays.add(Padding(padding: const EdgeInsets.only(top: 8), child: image));
   }
@@ -1267,7 +1287,7 @@ void showOptions(
         title: resolution.child,
         onTap: () {
           close();
-          resolution.onPressed();
+          resolution.onPressed?.call();
         },
       ));
     }
@@ -1279,7 +1299,7 @@ void showOptions(
         title: virtualDisplayMenu.child,
         onTap: () {
           close();
-          virtualDisplayMenu.onPressed();
+          virtualDisplayMenu.onPressed?.call();
         },
       ));
     }

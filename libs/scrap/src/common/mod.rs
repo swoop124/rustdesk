@@ -48,8 +48,9 @@ pub use self::convert::*;
 pub const STRIDE_ALIGN: usize = 64; // commonly used in libvpx vpx_img_alloc caller
 pub const HW_STRIDE_ALIGN: usize = 0; // recommended by av_frame_get_buffer
 
-pub mod camera;
 pub mod aom;
+#[cfg(not(any(target_os = "ios")))]
+pub mod camera;
 pub mod record;
 mod vpx;
 
@@ -62,6 +63,7 @@ pub enum ImageFormat {
 }
 
 #[repr(C)]
+#[derive(Clone)]
 pub struct ImageRgb {
     pub raw: Vec<u8>,
     pub w: usize,

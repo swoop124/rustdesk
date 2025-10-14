@@ -1,4 +1,4 @@
-#[cfg(windows)]
+#[cfg(any(target_os = "windows", target_os = "macos"))]
 use crate::client::translate;
 #[cfg(not(debug_assertions))]
 #[cfg(not(any(target_os = "android", target_os = "ios")))]
@@ -77,7 +77,15 @@ pub fn core_main() -> Option<Vec<String>> {
     }
     #[cfg(any(target_os = "linux", target_os = "windows"))]
     if args.is_empty() {
-        if crate::check_process("--server", false) && !crate::check_process("--tray", true) {
+        #[cfg(target_os = "linux")]
+        let should_check_start_tray = crate::check_process("--server", false);
+        // We can use `crate::check_process("--server", false)` on Windows.
+        // Because `--server` process is the System user's process. We can't get the arguments in `check_process()`.
+        // We can assume that self service running means the server is also running on Windows.
+        #[cfg(target_os = "windows")]
+        let should_check_start_tray = crate::platform::is_self_service_running()
+            && crate::platform::is_cur_exe_the_installed();
+        if should_check_start_tray && !crate::check_process("--tray", true) {
             #[cfg(target_os = "linux")]
             hbb_common::allow_err!(crate::platform::check_autostart_config());
             hbb_common::allow_err!(crate::run_me(vec!["--tray"]));
@@ -141,7 +149,6 @@ pub fn core_main() -> Option<Vec<String>> {
         }
     }
     hbb_common::init_log(false, &log_name);
-    log::info!("main start args: {:?}, env: {:?}", args, std::env::args());
 
     // linux uni (url) go here.
     #[cfg(all(target_os = "linux", feature = "flutter"))]
@@ -182,6 +189,26 @@ pub fn core_main() -> Option<Vec<String>> {
                     log::error!("Failed to uninstall: {}", err);
                 }
                 return None;
+            } else if args[0] == "--update" {
+                if config::is_disable_installation() {
+                    return None;
+                }
+                let res = platform::update_me(false);
+                let text = match res {
+                    Ok(_) => translate("Update successfully!".to_string()),
+                    Err(err) => {
+                        log::error!("Failed with error: {err}");
+                        translate("Update failed!".to_string())
+                    }
+                };
+                Toast::new(Toast::POWERSHELL_APP_ID)
+                    .title(&config::APP_NAME.read().unwrap())
+                    .text1(&text)
+                    .sound(Some(Sound::Default))
+                    .duration(Duration::Short)
+                    .show()
+                    .ok();
+                return None;
             } else if args[0] == "--after-install" {
                 if let Err(err) = platform::run_after_install() {
                     log::error!("Failed to after-install: {}", err);
@@ -196,12 +223,11 @@ pub fn core_main() -> Option<Vec<String>> {
                 if config::is_disable_installation() {
                     return None;
                 }
-                let res = platform::install_me(
-                    "desktopicon startmenu",
-                    "".to_owned(),
-                    true,
-                    args.len() > 1,
-                );
+                #[cfg(not(windows))]
+                let options = "desktopicon startmenu";
+                #[cfg(windows)]
+                let options = "desktopicon startmenu printer";
+                let res = platform::install_me(options, "".to_owned(), true, args.len() > 1);
                 let text = match res {
                     Ok(_) => translate("Installation Successful!".to_string()),
                     Err(err) => {
@@ -242,6 +268,43 @@ pub fn core_main() -> Option<Vec<String>> {
                     crate::virtual_display_manager::amyuni_idd::uninstall_driver()
                 );
                 return None;
+            } else if args[0] == "--install-remote-printer" {
+                #[cfg(windows)]
+                if crate::platform::is_win_10_or_greater() {
+                    match remote_printer::install_update_printer(&crate::get_app_name()) {
+                        Ok(_) => {
+                            log::info!("Remote printer installed/updated successfully");
+                        }
+                        Err(e) => {
+                            log::error!("Failed to install/update the remote printer: {}", e);
+                        }
+                    }
+                } else {
+                    log::error!("Win10 or greater required!");
+                }
+                return None;
+            } else if args[0] == "--uninstall-remote-printer" {
+                #[cfg(windows)]
+                if crate::platform::is_win_10_or_greater() {
+                    remote_printer::uninstall_printer(&crate::get_app_name());
+                    log::info!("Remote printer uninstalled");
+                }
+                return None;
+            }
+        }
+        #[cfg(target_os = "macos")]
+        {
+            use crate::platform;
+            if args[0] == "--update" {
+                let _text = match platform::update_me() {
+                    Ok(_) => {
+                        log::info!("{}", translate("Update successfully!".to_string()));
+                    }
+                    Err(err) => {
+                        log::error!("Update failed with error: {err}");
+                    }
+                };
+                return None;
             }
         }
         if args[0] == "--remove" {
@@ -278,14 +341,10 @@ pub fn core_main() -> Option<Vec<String>> {
                     .arg(&format!("{} --tray", crate::get_app_name().to_lowercase()))
                     .status()
                     .ok();
-                hbb_common::allow_err!(crate::platform::run_as_user(
-                    vec!["--tray"],
-                    None,
-                    None::<(&str, &str)>,
-                ));
+                hbb_common::allow_err!(crate::run_me(vec!["--tray"]));
             }
             #[cfg(windows)]
-            crate::privacy_mode::restore_reg_connectivity(true);
+            crate::privacy_mode::restore_reg_connectivity(true, false);
             #[cfg(any(target_os = "linux", target_os = "windows"))]
             {
                 crate::start_server(true, false);
@@ -394,50 +453,34 @@ pub fn core_main() -> Option<Vec<String>> {
             }
             return None;
         } else if args[0] == "--assign" {
-            if crate::platform::is_installed() && is_root() {
+            if config::Config::no_register_device() {
+                println!("Cannot assign an unregistrable device!");
+            } else if crate::platform::is_installed() && is_root() {
                 let max = args.len() - 1;
                 let pos = args.iter().position(|x| x == "--token").unwrap_or(max);
                 if pos < max {
                     let token = args[pos + 1].to_owned();
                     let id = crate::ipc::get_id();
                     let uuid = crate::encode64(hbb_common::get_uuid());
-                    let mut user_name = None;
-                    let pos = args.iter().position(|x| x == "--user_name").unwrap_or(max);
-                    if pos < max {
-                        user_name = Some(args[pos + 1].to_owned());
-                    }
-                    let mut strategy_name = None;
-                    let pos = args
-                        .iter()
-                        .position(|x| x == "--strategy_name")
-                        .unwrap_or(max);
-                    if pos < max {
-                        strategy_name = Some(args[pos + 1].to_owned());
-                    }
-                    let mut address_book_name = None;
-                    let pos = args
-                        .iter()
-                        .position(|x| x == "--address_book_name")
-                        .unwrap_or(max);
-                    if pos < max {
-                        address_book_name = Some(args[pos + 1].to_owned());
-                    }
-                    let mut address_book_tag = None;
-                    let pos = args
-                        .iter()
-                        .position(|x| x == "--address_book_tag")
-                        .unwrap_or(max);
-                    if pos < max {
-                        address_book_tag = Some(args[pos + 1].to_owned());
-                    }
-                    let mut device_group_name = None;
-                    let pos = args
-                        .iter()
-                        .position(|x| x == "--device_group_name")
-                        .unwrap_or(max);
-                    if pos < max {
-                        device_group_name = Some(args[pos + 1].to_owned());
-                    }
+                    let get_value = |c: &str| {
+                        let pos = args.iter().position(|x| x == c).unwrap_or(max);
+                        if pos < max {
+                            Some(args[pos + 1].to_owned())
+                        } else {
+                            None
+                        }
+                    };
+                    let user_name = get_value("--user_name");
+                    let strategy_name = get_value("--strategy_name");
+                    let address_book_name = get_value("--address_book_name");
+                    let address_book_tag = get_value("--address_book_tag");
+                    let address_book_alias = get_value("--address_book_alias");
+                    let address_book_password = get_value("--address_book_password");
+                    let address_book_note = get_value("--address_book_note");
+                    let device_group_name = get_value("--device_group_name");
+                    let note = get_value("--note");
+                    let device_username = get_value("--device_username");
+                    let device_name = get_value("--device_name");
                     let mut body = serde_json::json!({
                         "id": id,
                         "uuid": uuid,
@@ -447,9 +490,19 @@ pub fn core_main() -> Option<Vec<String>> {
                         && strategy_name.is_none()
                         && address_book_name.is_none()
                         && device_group_name.is_none()
+                        && note.is_none()
+                        && device_username.is_none()
+                        && device_name.is_none()
                     {
                         println!(
-                            "--user_name or --strategy_name or --address_book_name or --device_group_name is required!"
+                            r#"At least one of the following options is required:
+  --user_name
+  --strategy_name
+  --address_book_name
+  --device_group_name
+  --note
+  --device_username
+  --device_name"#
                         );
                     } else {
                         if let Some(name) = user_name {
@@ -463,9 +516,27 @@ pub fn core_main() -> Option<Vec<String>> {
                             if let Some(name) = address_book_tag {
                                 body["address_book_tag"] = serde_json::json!(name);
                             }
+                            if let Some(name) = address_book_alias {
+                                body["address_book_alias"] = serde_json::json!(name);
+                            }
+                            if let Some(name) = address_book_password {
+                                body["address_book_password"] = serde_json::json!(name);
+                            }
+                            if let Some(name) = address_book_note {
+                                body["address_book_note"] = serde_json::json!(name);
+                            }
                         }
                         if let Some(name) = device_group_name {
                             body["device_group_name"] = serde_json::json!(name);
+                        }
+                        if let Some(name) = note {
+                            body["note"] = serde_json::json!(name);
+                        }
+                        if let Some(name) = device_username {
+                            body["device_username"] = serde_json::json!(name);
+                        }
+                        if let Some(name) = device_name {
+                            body["device_name"] = serde_json::json!(name);
                         }
                         let url = crate::ui_interface::get_api_server() + "/api/devices/cli";
                         match crate::post_request_sync(url, body.to_string(), &header) {
@@ -500,6 +571,12 @@ pub fn core_main() -> Option<Vec<String>> {
             {
                 crate::ui_interface::start_option_status_sync();
                 crate::flutter::connection_manager::start_cm_no_ui();
+            }
+            return None;
+        } else if args[0] == "--whiteboard" {
+            #[cfg(not(any(target_os = "android", target_os = "ios")))]
+            {
+                crate::whiteboard::run();
             }
             return None;
         } else if args[0] == "-gtk-sudo" {
@@ -590,7 +667,8 @@ fn core_main_invoke_new_connection(mut args: std::env::Args) -> Option<Vec<Strin
     let mut param_array = vec![];
     while let Some(arg) = args.next() {
         match arg.as_str() {
-            "--connect" | "--play" | "--file-transfer" | "--view-camera" | "--port-forward" | "--rdp" => {
+            "--connect" | "--play" | "--file-transfer" | "--view-camera" | "--port-forward"
+            | "--rdp" => {
                 authority = Some((&arg.to_string()[2..]).to_owned());
                 id = args.next();
             }

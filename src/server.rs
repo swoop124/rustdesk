@@ -33,6 +33,8 @@ use video_service::VideoSource;
 use crate::ipc::Data;
 
 pub mod audio_service;
+#[cfg(not(any(target_os = "android", target_os = "ios")))]
+pub mod terminal_service;
 cfg_if::cfg_if! {
 if #[cfg(not(target_os = "ios"))] {
 mod clipboard_service;
@@ -69,6 +71,9 @@ pub mod portable_service;
 mod service;
 mod video_qos;
 pub mod video_service;
+
+#[cfg(all(target_os = "windows", feature = "flutter"))]
+pub mod printer_service;
 
 pub type Childs = Arc<Mutex<Vec<std::process::Child>>>;
 type ConnMap = HashMap<i32, ConnInner>;
@@ -129,6 +134,21 @@ pub fn new() -> ServerPtr {
             server.add_service(Box::new(input_service::new_window_focus()));
         }
     }
+    #[cfg(all(target_os = "windows", feature = "flutter"))]
+    {
+        match printer_service::init(&crate::get_app_name()) {
+            Ok(()) => {
+                log::info!("printer service initialized");
+                server.add_service(Box::new(printer_service::new(
+                    printer_service::NAME.to_owned(),
+                )));
+            }
+            Err(e) => {
+                log::error!("printer service init failed: {}", e);
+            }
+        }
+    }
+    // Terminal service is created per connection, not globally
     Arc::new(RwLock::new(server))
 }
 
@@ -211,11 +231,13 @@ pub async fn create_tcp_connection(
     #[cfg(target_os = "macos")]
     {
         use std::process::Command;
-        Command::new("/usr/bin/caffeinate")
+        if let Ok(task) = Command::new("/usr/bin/caffeinate")
             .arg("-u")
             .arg("-t 5")
             .spawn()
-            .ok();
+        {
+            super::CHILD_PROCESS.lock().unwrap().push(task);
+        }
         log::info!("wake up macos");
     }
     Connection::start(addr, stream, id, Arc::downgrade(&server)).await;
@@ -229,7 +251,7 @@ pub async fn accept_connection(
     secure: bool,
 ) {
     if let Err(err) = accept_connection_(server, socket, secure).await {
-        log::error!("Failed to accept connection from {}: {}", peer_addr, err);
+        log::warn!("Failed to accept connection from {}: {}", peer_addr, err);
     }
 }
 
